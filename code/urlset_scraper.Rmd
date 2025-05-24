@@ -25,12 +25,13 @@ library(data.table)
 library(futile.logger)
 library(lubridate)
 
-# Create the output folder if it does not exist
+# Create output folder if it does not exist
 step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
 if (!dir.exists(step_1_output_folder)) {
   dir.create(step_1_output_folder)
 }
 
+# Create logging folder if it does not exist
 step_1_logging_folder <- "/Users/zorbeyozcan/newsmedia_scraper/documentation"
 if (!dir.exists(step_1_logging_folder)) {
   dir.create(step_1_logging_folder)
@@ -41,17 +42,23 @@ cat("Step 1 completed: Packages loaded and output folder created.\n")
 
 ```
 
+
+
 ```{r Step 2: Load Input CSV File}
 # Load the input CSV file into a data.table using fread
 step_2_input_dt <- fread("/Users/zorbeyozcan/newsmedia_scraper/data/p1_clean_sitemaps.csv", stringsAsFactors = FALSE)
+
+
 cat("Step 2 completed: Input CSV file loaded.\n")
 
 ```
 
+
+
 ```{r Step 3: Set Global Parameters, Exclusions, and User Agents}
 # Set global variables for the date range
-global_date_start <- as.Date("2025-01-28")
-global_date_end   <- as.Date("2025-02-02")
+global_date_start <- as.Date("2025-01-01")
+global_date_end   <- as.Date("2025-02-23")
 
 # Set global list of excluded strings (URLs containing these strings will be excluded)
 global_excluded_strings <- c(
@@ -81,7 +88,10 @@ global_user_agent_list <- c(
 
 
 cat("Step 3 completed: Global parameters, excluded lists, VPN IP, and user agents initialized.\n")
+
 ```
+
+
 
 ```{r Step 4: Create Global Data Tables for Error Logging, Retry Handling, and Master Rotation Tracking}
 # Create the global error data table for non-response-based sitemap processing errors
@@ -92,7 +102,7 @@ global_error_dt <- data.table(
   layer_1_url            = character(),    # Top-level sitemap URL
   error_url_id           = integer(),      # ID of the problematic sub-URL (from progression)
   error_url              = character(),    # Sub-sitemap or link that caused the error
-  parent_url_id          = integer(),      # Optional: ID of the parent sitemap URL
+  parent_url_id          = integer(),      # ID of the parent sitemap URL
   root_tag               = character(),    # Root tag if known ("urlset", "sitemapindex", "unknown", etc.)
   error_category         = character(),    # Class of error (e.g. "xml_parse_error", "excluded_string", "missing_root_tag", ...)
   processed_flag         = logical(),      # Was this URL marked as processed in progression_dt?
@@ -116,9 +126,12 @@ global_master_dt <- data.table(
   processing_flag        = character()     # Indicates processing status of the input
 )
 
+
 cat("Step 4 completed: Global error and master data tables created.\n")
 
 ```
+
+
 
 ```{r Step 5: Defining date-check helper functions:}
 # Function: step_5_1_date_check_urlset_func
@@ -416,6 +429,8 @@ cat("Step 5 completed: Date check functions defined.\n")
 
 ```
 
+
+
 ```{r Step 6: Defining sorting functions:}
 # Function: step_6_1_grouping_func
 # This function takes a data.table of links marked as 'no_date' and attempts to group them into pagination groups based on similar basename patterns.
@@ -618,9 +633,12 @@ step_6_sorting_func <- function(step_6_links_vector,
   return(step_6_sort_list_dt)
 }
 
+
 cat("Step 6 completed: Sorting function defined.\n")
 
 ```
+
+
 
 ```{r Step 7: Defining core functions for processing sitemaps:}
 # The function step_7_1_progression_update  updates the progression data table for a sitemap.
@@ -1321,10 +1339,11 @@ step_7_4_urlset_scraper_func <- function(
 }
 
 
-
 cat("Step 7 completed: Progression_dt updater function, response_dt updater function, master_dt updater function, urlset scraper function initialized.\n")
 
 ```
+
+
 
 ```{r Step 8: Main recursive sitemap processing function with logging}
 
@@ -1783,9 +1802,12 @@ step_8_recursive_processing_func <- function(next_input) {
     }
   }
 }
+
+
 cat("Step 8 completed: Recursive sitemap processing function defined.\n")
 
 ```
+
 
 
 ```{r Step 9: Defining the Master Loop }
@@ -1840,9 +1862,11 @@ step_9_master_loop_func <- function() {
   message(step_9_total_count,    " entries had total errors")
 }
 
+
 cat("Step 9 completed: Master loop defined. \n")
 
 ```
+
 
 
 ```{r Step 10: Preparing the Input, initializing progression structures}
@@ -1991,8 +2015,11 @@ for (i in seq_len(nrow(step_10_clean_input_dt))) {
    step_10_date_excluded_dt,
    root_entry)
 
+
 cat("Step 10 completed: individual progression, output and response tables initialized, master_dt updated.\n")
+
 ```
+
 
 
 ```{r Step 11: Calling the Master Loop}
@@ -2007,7 +2034,9 @@ step_9_master_loop_func()
 
 # Stop sinking and restore normal console output
 sink()
+
 ```
+
 
 
 ```{r Step 12: Wrangling and saving outputs, generating retry_progression_dts}
@@ -2173,9 +2202,9 @@ step_12_wrangle_and_save_func <- function() {
 
 step_12_wrangle_and_save_func()
 
+
+cat("Step 12 completed: All date cleaned and saved.\n")
+
 ```
-
-
-
 
 
