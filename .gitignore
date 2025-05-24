@@ -47,3 +47,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+####
+
+# Working data (RDS Files in between steps)
+working_data/
