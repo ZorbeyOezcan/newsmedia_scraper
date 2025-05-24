@@ -1,0 +1,850 @@
+---
+title: "sitemap_scraper"
+author: "Zorbey Özcan"
+date: "2025-05-24"
+output: html_document
+---
+
+# What does this code do? 
+
+This code generates data and produces the final prodcut of phase 1 of the NewsMedia data collection process. 
+
+It takes a list of news media domain names, that are integrated into the paberboy r package by @JBGruber. 
+It returns data containing all publicly available sitemaps of those domain names. 
+
+## The data includes:
+
+A data.frame with the columns: 
+
+---
+
+|          | domain_urls | robots_urls | robots_contents | sitemap_urls | sitemap_contents | sitemap_check |
+|----------|----------|----------|----------|----------|----------|----------|
+| **1** | the url of the domain  | the url of the robots.txt file  | the contents of the robots.txt file  | the url of the sitemap.xml file | the contents of the sitemap.xml file  | a check or comment for that entry  |
+
+
+## Limitations: 
+
+In this project, I only focus on scraping German news media articles. For that reason, the list contains only German news media publications. 
+- Not all sitemaps are available 
+
+
+```{r Preparation}
+# knitting Options 
+knitr::opts_chunk$set(
+  echo    = TRUE,       
+  results = 'hide',  
+  message = FALSE,  
+  warning = FALSE    
+)
+library(httr)
+library(dplyr)
+library(tidyr)
+library(rmarkdown)
+library(rvest)
+```
+
+
+```{r Retrieving input data }
+# Define the GitHub URL
+step_0_url <- "https://github.com/JBGruber/paperboy"
+
+# Read the HTML content of the page
+step_0_page <- read_html(step_0_url)
+
+# Extract all tables from the HTML
+step_0_tables_list <- step_0_page %>% html_elements("table")
+
+# Convert the sixth table to a data frame
+global_input_all_domains <- step_0_tables_list[[6]] %>% html_table()
+
+# Filter rows where the domain column contains ".de", "postillion", or "finanzen" for all german newsmedia
+global_input_all_domains <- global_input_all_domains %>%
+  filter(grepl("\\.de|postillion|finanzen|faz", domain, ignore.case = TRUE)) %>%
+  select(domain_url = domain)
+
+# Correct the domain entry with a duplicated ".de"
+global_input_all_domains <- global_input_all_domains %>%
+  mutate(domain_url = ifelse(domain_url == "abendzeitung-muenchen.de.de", 
+                             "abendzeitung-muenchen.de", 
+                             domain_url))
+
+```
+
+# Step 1:
+## This code chunk takes the global_input_all_domains and searches for robots.txt urls for all those domains. It returns step_1_domain_urls_robotsUrls_df and passes it to the next chunk.
+### This code produces traffic. 
+```{r Step 1 }
+# Function to retrieve robots.txt URL from a domain using different protocols
+step_1_robots_url_func <- function(step_1_domain_url) {
+  # Construct possible robots.txt URLs for HTTP, HTTPS, and HTTPS with www
+  step_1_robots_http_url <- paste0("http://", step_1_domain_url, "/robots.txt")
+  step_1_robots_https_url <- paste0("https://", step_1_domain_url, "/robots.txt")
+  step_1_robots_www_https_url <- paste0("https://www.", step_1_domain_url, "/robots.txt")
+
+  # Initialize variables to store responses
+  step_1_response_http <- NULL
+  step_1_response_https <- NULL
+  step_1_response_www_https <- NULL
+
+  # Attempt to fetch the robots.txt file using HTTP
+  step_1_response_http <- tryCatch(
+    {
+      httr::HEAD(step_1_robots_http_url, followlocation = TRUE)
+    },
+    error = function(e) NULL
+  )
+
+  # Attempt to fetch the robots.txt file using HTTPS
+  step_1_response_https <- tryCatch(
+    {
+      httr::HEAD(step_1_robots_https_url, followlocation = TRUE)
+    },
+    error = function(e) NULL
+  )
+
+  # Attempt to fetch the robots.txt file using HTTPS with www
+  step_1_response_www_https <- tryCatch(
+    {
+      httr::HEAD(step_1_robots_www_https_url, followlocation = TRUE)
+    },
+    error = function(e) NULL
+  )
+
+  # Check and return the first valid robots.txt URL found
+  if (!is.null(step_1_response_http) && step_1_response_http$status_code == 200) {
+    print(paste("Returning HTTP robots.txt URL:", step_1_robots_http_url))
+    return(step_1_robots_http_url)
+  } else if (!is.null(step_1_response_https) && step_1_response_https$status_code == 200) {
+    print(paste("Returning HTTPS robots.txt URL:", step_1_robots_https_url))
+    return(step_1_robots_https_url)
+  } else if (!is.null(step_1_response_www_https) && step_1_response_www_https$status_code == 200) {
+    print(paste("Returning HTTPS www robots.txt URL:", step_1_robots_www_https_url))
+    return(step_1_robots_www_https_url)
+  } else {
+    print("No valid robots.txt URL found. Returning NA.")
+    return(NA)
+  }
+}
+
+# Vectorize the function for processing multiple domains
+step_1_get_robots_url_func <- Vectorize(step_1_robots_url_func)
+
+# Create a new DataFrame for storing robots.txt URLs
+step_1_domain_urls_robotsUrls_df <- global_input_all_domains
+
+# Add a new column with robots.txt URLs using the vectorized function
+step_1_domain_urls_robotsUrls_df$robots_txt <- step_1_get_robots_url_func(step_1_domain_urls_robotsUrls_df$domain_url)
+
+# Count the total number of domains and valid robots.txt URLs
+step_1_total_domains_check <- nrow(step_1_domain_urls_robotsUrls_df)
+step_1_valid_robots_check <- sum(!is.na(step_1_domain_urls_robotsUrls_df$robots_txt))
+
+# Print the summary of the robots.txt retrieval
+if (step_1_valid_robots_check == step_1_total_domains_check) {
+  print(paste(step_1_valid_robots_check, "of", step_1_total_domains_check, "robots.txt URLs found"))
+} else {
+  print(paste(step_1_valid_robots_check, "of", step_1_total_domains_check, "robots.txt URLs found. Some are missing."))
+}
+
+# Debug function to create a DataFrame for unsuccessful robots.txt fetches
+if (step_1_valid_robots_check != step_1_total_domains_check) {
+  # Create a debug DataFrame with domains where robots.txt was not found
+  step_1_1_debug_unsuccsesful_fetches_df <- step_1_domain_urls_robotsUrls_df %>%
+    filter(is.na(robots_txt)) %>%  # Filter rows where robots.txt is NA
+    select(domain_url, robots_txt)  # Include relevant columns for debugging
+
+  # Add a column to indicate that no robots.txt was found
+  step_1_1_debug_unsuccsesful_fetches_df <- step_1_1_debug_unsuccsesful_fetches_df %>%
+    mutate(
+      issue = "No valid robots.txt URL found"
+    )
+
+  # Print confirmation
+  print(paste("Created step_1_1_debug_unsuccsesful_fetches_df with", nrow(step_1_1_debug_unsuccsesful_fetches_df), "unsuccessful fetches"))
+}
+
+
+```
+
+# Step 2:
+## This code chunk takes the  and . It returns   with    .
+### This code produces traffic. 
+```{r Step 2 }
+# Function to retrieve the content of a robots.txt file given its URL
+step_2_robots_txt_content_func <- function(step_2_url) {
+  # Check the HTTP status of the URL
+  step_2_response <- tryCatch(
+    {
+      httr::HEAD(step_2_url, timeout(5))  # Check the HEAD response for the URL
+    },
+    error = function(e) NULL
+  )
+
+  # Debugging: Print the HTTP status or connection error
+  if (!is.null(step_2_response)) {
+    print(paste("HTTP status for", step_2_url, ":", step_2_response$status_code))
+    if (step_2_response$status_code == 200) {
+      print(paste("robots.txt successfully found for:", step_2_url))
+    }
+  } else {
+    print(paste("Error: Unable to connect to", step_2_url))
+  }
+
+  # Fetch and return the content of the robots.txt file if accessible
+  tryCatch(
+    {
+      httr::GET(step_2_url) %>% content("text", encoding = "UTF-8")  # Get the full content
+    },
+    error = function(e) NA  # Return NA if any error occurs
+  )
+}
+
+# Apply the function to each URL and store the results in a new DataFrame
+step_2_domain_Urls_robotsUrls_robotsContents_df <- step_1_domain_urls_robotsUrls_df %>%
+  mutate(
+    robots_txt_content = sapply(robots_txt, step_2_robots_txt_content_func)
+  )
+
+# Calculate the total number of domains and valid robots.txt content entries
+step_2_total_domains_check <- nrow(step_1_domain_urls_robotsUrls_df)
+step_2_valid_contents_check <- sum(!is.na(step_2_domain_Urls_robotsUrls_robotsContents_df$robots_txt_content))
+
+# Print the summary of the robots.txt content retrieval
+if (step_2_valid_contents_check == step_2_total_domains_check) {
+  print(paste(step_2_valid_contents_check, "of", step_2_total_domains_check, "robots.txt contents successfully fetched"))
+} else {
+  print(paste(step_2_valid_contents_check, "of", step_2_total_domains_check, "robots.txt contents fetched. Some are missing."))
+}
+
+# Debug function to create a DataFrame for unsuccessful robots.txt content fetches
+if (step_2_valid_contents_check != step_2_total_domains_check) {
+  # Create a debug DataFrame with domains where robots.txt content was not successfully fetched
+  step_2_1_debug_unsuccsesful_fetches_df <- step_2_domain_Urls_robotsUrls_robotsContents_df %>%
+    filter(is.na(robots_txt_content)) %>%  # Filter rows where robots.txt content is NA
+    mutate(
+      http_status = sapply(robots_txt, function(url) {
+        response <- tryCatch(
+          {
+            httr::HEAD(url, timeout(5))
+          },
+          error = function(e) NULL
+        )
+        if (!is.null(response)) {
+          return(response$status_code)  # Return the HTTP status code if available
+        } else {
+          return("Error")  # Indicate an error if no response
+        }
+      }),
+      issue = "robots.txt content not fetched"  # Indicate the issue
+    ) %>%
+    select(domain_url, robots_txt, http_status, issue)  # Include relevant columns for debugging
+
+  # Print confirmation
+  print(paste("Created step_2_1_debug_unsuccsesful_fetches_df with", nrow(step_2_1_debug_unsuccsesful_fetches_df), "unsuccessful fetches"))
+}
+
+```
+
+
+
+# Step 3:
+## This code chunk takes the  and . It returns   with    .
+### This code runs locally. 
+```{r Step 3 }
+# Function to extract sitemap URLs from robots.txt content
+step_3_extract_sitemap_urls_func <- function(step_3_content) {
+  # Remove line breaks and replace with spaces
+  step_3_clean_content <- gsub("[\r\n]+", " ", step_3_content)
+
+  # Regular expression to identify sitemap URLs, case-insensitive
+  step_3_sitemap_pattern <- "(?i)sitemap:\\s*(https?://[\\w./~:-]+)"
+
+  # Extract all matching URLs
+  step_3_sitemaps <- regmatches(step_3_clean_content, gregexpr(step_3_sitemap_pattern, step_3_clean_content, perl = TRUE))[[1]]
+
+  # Remove the "sitemap:" prefix from results
+  step_3_sitemaps <- gsub("(?i)sitemap[:\\s]+", "", step_3_sitemaps, perl = TRUE)
+
+  # Return unique URLs or NA if none found
+  if (length(step_3_sitemaps) == 0) {
+    return(NA)
+  } else {
+    return(unique(step_3_sitemaps))
+  }
+}
+
+# Expand the DataFrame by adding sitemap URLs and related information
+step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df <- step_2_domain_Urls_robotsUrls_robotsContents_df %>%
+  mutate(
+    sitemap_URLs = lapply(robots_txt_content, function(step_3_content) {
+      if (is.na(step_3_content)) {
+        return(NA)  # Return NA if no robots.txt content is available
+      } else {
+        return(step_3_extract_sitemap_urls_func(step_3_content))  # Extract sitemap URLs
+      }
+    }),
+    sitemap_check = case_when(
+      is.na(sitemap_URLs) ~ "no sitemap",                          # No sitemaps found
+      lengths(sitemap_URLs) == 1 ~ "one sitemap",                  # One sitemap found
+      lengths(sitemap_URLs) > 1 ~ "multiple sitemaps"              # Multiple sitemaps found
+    )
+  ) %>%
+  tidyr::unnest(sitemap_URLs, keep_empty = TRUE) %>%  # Flatten lists and keep empty entries
+  rename(sitemap_URL = sitemap_URLs)  # Rename the column for clarity
+
+# Calculate the total number of sitemap URLs and domains with/without sitemaps
+step_3_total_sitemaps_check <- sum(!is.na(step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df$sitemap_URL))
+step_3_domains_with_sitemaps_check <- step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df %>%
+  filter(sitemap_check != "no sitemap") %>%
+  distinct(domain_url) %>%
+  nrow()
+step_3_domains_without_sitemaps_check <- step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df %>%
+  filter(sitemap_check == "no sitemap") %>%
+  distinct(domain_url) %>%
+  nrow()
+
+# Print the summary of sitemap extraction
+print(paste("Total sitemap URLs found:", step_3_total_sitemaps_check))
+print(paste("Unique domains with sitemap URLs:", step_3_domains_with_sitemaps_check))
+print(paste("Unique domains without sitemap URLs:", step_3_domains_without_sitemaps_check))
+
+```
+
+
+# Step 4:
+## This code chunk takes the  and . It returns   with    .
+### This code produces traffic.
+```{r Step 4 }
+# Define typical sitemap paths
+step_4_typical_sitemap_paths_vec <- c(
+  "/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/sitemaps/sitemap.xml",
+  "/sitemaps/sitemap_index.xml", "/sitemap-posts.xml", "/sitemap-pages.xml",
+  "/sitemap-products.xml", "/sitemap-2025-01.xml", "/sitemap-2024.xml",
+  "/sitemap-images.xml", "/sitemap-videos.xml", "/sitemap-en.xml",
+  "/sitemap-de.xml", "/sitemap.php", "/sitemap.txt", "/sitemap.xml.gz",
+  "/sitemap/", "/sitemapindex.xml", "/sitemap/index.xml", "/sitemap1.xml",
+  "/~/sitemap.xml", "/~/sitemap_index.xml", "/~/sitemap-index.xml",
+  "/~/sitemaps/sitemap.xml", "/~/sitemaps/sitemap_index.xml", "/~/sitemap-posts.xml",
+  "/~/sitemap-pages.xml", "/~/sitemap-products.xml", "/~/sitemap-2025-01.xml",
+  "/~/sitemap-2024.xml", "/~/sitemap-images.xml", "/~/sitemap-videos.xml",
+  "/~/sitemap-en.xml", "/~/sitemap-de.xml", "/~/sitemap.php", "/~/sitemap.txt",
+  "/~/sitemap.xml.gz", "/~/sitemap/", "/~/sitemapindex.xml", "/~/sitemap/index.xml",
+  "/~/sitemap1.xml"
+)
+
+# Function to check typical sitemap URLs for a given domain
+step_4_find_typical_sitemaps_func <- function(step_4_domain) {
+  step_4_valid_sitemaps <- c()  # List to store found sitemaps
+
+  for (step_4_path in step_4_typical_sitemap_paths_vec) {
+    step_4_url <- paste0("https://", step_4_domain, step_4_path)  # Construct full URL
+    step_4_response <- tryCatch(
+      {
+        httr::HEAD(step_4_url, timeout(5))  # HTTP HEAD request
+      },
+      error = function(e) NULL
+    )
+
+    if (!is.null(step_4_response)) {
+      # Print HTTP status for debugging
+      print(paste("HTTP status for", step_4_url, ":", step_4_response$status_code))
+
+      # Check if the sitemap is valid (status code 200)
+      if (step_4_response$status_code == 200) {
+        print(paste("Valid sitemap found for domain", step_4_domain, ":", step_4_url))
+        step_4_valid_sitemaps <- c(step_4_valid_sitemaps, step_4_url)
+      }
+    } else {
+      print(paste("Error: Unable to connect to", step_4_url))
+    }
+  }
+
+  return(step_4_valid_sitemaps)  # Return all found sitemaps
+}
+
+# Create a new DataFrame for domains with no sitemaps
+step_4_1_missing_sitemaps_df <- step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df %>%
+  filter(sitemap_check == "no sitemap") %>%
+  distinct(domain_url) %>%
+  mutate(
+    sitemap_URL = NA,            # Add column for found sitemaps
+    sitemap_check = "no sitemap" # Initial status
+  )
+
+# Search for typical sitemaps and update the DataFrame
+step_4_1_missing_sitemaps_df <- step_4_1_missing_sitemaps_df %>%
+  rowwise() %>%
+  mutate(
+    found_sitemaps = list(step_4_find_typical_sitemaps_func(domain_url))  # Find typical sitemaps
+  ) %>%
+  tidyr::unnest(found_sitemaps, keep_empty = TRUE) %>%
+  mutate(
+    sitemap_URL = ifelse(is.na(found_sitemaps), NA, found_sitemaps),  # Add found sitemaps
+    sitemap_check = ifelse(is.na(found_sitemaps), "no sitemap", "found typical sitemap")
+  ) %>%
+  select(domain_url, sitemap_URL, sitemap_check)  # Keep relevant columns
+
+# Merge original and new results into the final DataFrame
+step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df <- step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df %>%
+  left_join(
+    step_4_1_missing_sitemaps_df %>%
+      filter(!is.na(sitemap_URL)),  # Only include new sitemaps
+    by = "domain_url",
+    suffix = c("", "_new")
+  ) %>%
+  mutate(
+    sitemap_URL = coalesce(sitemap_URL_new, sitemap_URL),          # Merge URLs
+    sitemap_check = coalesce(sitemap_check_new, sitemap_check)    # Merge status
+  ) %>%
+  select(-ends_with("_new"))  # Remove helper columns
+
+# Check: Print results for validation
+step_4_total_domains_check <- nrow(step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df)
+step_4_total_sitemaps_check <- sum(!is.na(step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df$sitemap_URL))
+step_4_domains_with_sitemaps_check <- step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df %>%
+  filter(!is.na(sitemap_URL)) %>%
+  distinct(domain_url) %>%
+  nrow()
+step_4_domains_without_sitemaps_check <- step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df %>%
+  filter(is.na(sitemap_URL)) %>%
+  distinct(domain_url) %>%
+  nrow()
+step_4_new_sitemaps_added_check <- step_4_1_missing_sitemaps_df %>%
+  filter(!is.na(sitemap_URL)) %>%
+  distinct(domain_url) %>%
+  nrow()
+
+print(paste("Total sitemap URLs found:", step_4_total_sitemaps_check))
+print(paste("Unique domains with sitemap URLs:", step_4_domains_with_sitemaps_check))
+print(paste("Unique domains without sitemap URLs:", step_4_domains_without_sitemaps_check))
+print(paste("This step added", step_4_new_sitemaps_added_check, "sitemap URLs"))
+
+```
+
+# Step 5:
+## This code chunk takes the  and . It returns   with    .
+### This code produces traffic. 
+```{r Step 5 }
+# Function to fetch the content of a sitemap URL and capture the HTTP status or errors
+step_5_get_sitemap_content_func <- function(step_5_url) {
+  if (is.na(step_5_url)) {
+    print("Sitemap URL is NA, skipping...")
+    return(list(content = NA, status = "NA"))  # Return NA for content and status
+  }
+
+  step_5_result <- tryCatch(
+    {
+      step_5_response <- httr::GET(step_5_url, timeout(120))  # HTTP GET request with timeout
+      print(paste("Fetching sitemap for URL:", step_5_url, "Status code:", step_5_response$status_code))
+      
+      if (step_5_response$status_code == 200) {
+        # Check if the URL points to a .gz file
+        if (grepl("\\.gz$", step_5_url, ignore.case = TRUE)) {
+          print("Detected .gz sitemap, attempting to decompress...")
+
+          # Retrieve raw binary content
+          raw_content <- httr::content(step_5_response, as = "raw")  
+          
+          # Decompress the .gz content using gzcon()
+          con <- gzcon(rawConnection(raw_content))
+          xml_text <- readLines(con, warn = FALSE)
+          close(con)
+          
+          # Return the extracted XML content
+          list(content = paste(xml_text, collapse = "\n"), status = step_5_response$status_code)
+          
+        } else {
+          # Standard handling for non-gzipped sitemaps
+          list(content = httr::content(step_5_response, "text", encoding = "UTF-8"), status = step_5_response$status_code)
+        }
+        
+      } else {
+        print(paste("Failed to fetch sitemap for URL:", step_5_url, "Status code:", step_5_response$status_code))
+        list(content = NA, status = step_5_response$status_code)
+      }
+    },
+    error = function(e) {
+      print(paste("Error fetching sitemap for URL:", step_5_url))
+      list(content = NA, status = "Error")  # Capture error as status
+    }
+  )
+
+  return(step_5_result)
+}
+
+# Copy the DataFrame and add columns for sitemap content and status
+step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents <- step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df %>%
+  mutate(
+    result = lapply(sitemap_URL, step_5_get_sitemap_content_func),  # Fetch the content and status
+    sitemap_content = sapply(result, function(x) x$content),        # Extract content
+    http_status = sapply(result, function(x) x$status)             # Extract HTTP status or error
+  ) %>%
+  select(-result)  # Remove the intermediate result column
+
+# Check: Only consider rows with a valid sitemap_URL
+step_5_valid_sitemaps_check <- step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents %>%
+  filter(!is.na(sitemap_URL))
+
+step_5_total_valid_sitemaps_check <- nrow(step_5_valid_sitemaps_check)
+step_5_loaded_valid_sitemaps_check <- sum(!is.na(step_5_valid_sitemaps_check$sitemap_content))
+
+print(paste("Total sitemap URLs with valid links:", step_5_total_valid_sitemaps_check))
+print(paste(step_5_loaded_valid_sitemaps_check, "of", step_5_total_valid_sitemaps_check, "sitemaps were loaded successfully"))
+
+# If not all valid sitemaps were fetched successfully, create a debug DataFrame
+if (step_5_loaded_valid_sitemaps_check != step_5_total_valid_sitemaps_check) {
+  # Identify domains with at least one successfully fetched sitemap
+  domains_with_successful_sitemaps <- step_5_valid_sitemaps_check %>%
+    filter(!is.na(sitemap_content)) %>%
+    pull(domain_url)
+  
+  # Create the debug DataFrame
+  step_5_1_debug_unsuccsesful_fetches_df <- step_5_valid_sitemaps_check %>%
+    filter(is.na(sitemap_content)) %>%
+    mutate(
+      is_only_sitemap = !domain_url %in% domains_with_successful_sitemaps  # Check if this is the only sitemap for the domain
+    ) %>%
+    select(domain_url, sitemap_URL, http_status, is_only_sitemap)  # Include status and exclusivity in debug
+
+  print(paste("Created step_5_1_debug_unsuccsesful_fetches_df with", nrow(step_5_1_debug_unsuccsesful_fetches_df), "unsuccessful fetches"))
+}
+
+```
+
+
+# Step 6:
+## This code chunk takes the  and . It returns   with    .
+### This code runs locally. 
+```{r Step 6 }
+# Step 6: Clean and export final sitemap dataset
+step_6_cleaned_df <- step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents
+
+# Assign a unique domainID to each unique domain
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(domainID = as.numeric(factor(domain_url)))  # Each unique domain gets a unique ID
+
+# Step 6.1 - Filter Media Sitemaps - These contain links to pictures, videos and podcasts exclusively
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(filtered_because = ifelse(grepl(paste(c("image","bilder", "picture", "fotografie", "photo", "foto", "imagegallery", "gallery", "video", "media", "audio", "podcasts", "podcast" ), collapse = "|"), sitemap_URL, ignore.case = TRUE), "media_sitemaps", NA))
+
+filtered_media_sitemaps_df <- step_6_cleaned_df %>% filter(!is.na(filtered_because))
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(is.na(filtered_because)) %>% select(-filtered_because)
+print(paste(nrow(filtered_media_sitemaps_df), "entries had media-related sitemaps and have been filtered"))
+
+# Step 6.2 - Filter other unrelevant sitemaps 
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(filtered_because = ifelse(grepl(paste(c( "themen.*-az", # these contain topics and not articles
+                                                  "author",      # these contain author pages and not articles
+                                                  "sport",       # these contain sports and live broacasts and not articles
+                                                  "shop",        # these contain shop elements and not articles
+                                                  "security"),   # these contain administrative sitemaps and not articles
+                                                  collapse = "|"), sitemap_URL, ignore.case = TRUE),
+                                                  "irrelevant_sitemaps", NA))
+
+filtered_irrelevant_sitemaps_df <- step_6_cleaned_df %>% filter(!is.na(filtered_because))
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(is.na(filtered_because)) %>% select(-filtered_because)
+print(paste(nrow(filtered_irrelevant_sitemaps_df), "entries had other non related sitemaps and have been filtered"))
+
+
+# Step 6.3 - Filter HTML Contents
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(filtered_because = ifelse(grepl("<!DOCTYPE html", sitemap_content, ignore.case = TRUE), "html contents", NA))
+
+filtered_html_sitemaps_df <- step_6_cleaned_df %>% filter(!is.na(filtered_because))
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(is.na(filtered_because)) %>% select(-filtered_because)
+print(paste(nrow(filtered_html_sitemaps_df), "entries had HTML contents in sitemap and have been filtered"))
+
+# Step 6.4 - Filter Dynamic Websites which do not rely on sitemaps 
+# (I verified those as dynamic websites manually by disabeling java script in my browser and using the free browser plug in "Wappalyzer")
+# (Other domains are TV or radio channels, which carry TV Shows and podcasts, but not articles) 
+blocked_domains <- c(
+  "dnn.de", "express.de", "focus.de", "haz.de", "ksta.de", "lvz.de",
+  "maz-online.de", "ostsee-zeitung.de", "rbb24.de", "rnd.de",
+  "ruhrnachrichten.de", "saechsische.de", 
+  # tv channels and radio:
+  "deutschlandfunk.de","deutschlandfunkkultur.de", "kabeleins.de", "prosieben.de", "vox.de"
+)
+
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(filtered_because = ifelse(domain_url %in% blocked_domains, "dynamic websites", NA))
+
+filtered_dynamic_sitemaps_df <- step_6_cleaned_df %>% filter(!is.na(filtered_because))
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(is.na(filtered_because)) %>% select(-filtered_because)
+print(paste(nrow(filtered_dynamic_sitemaps_df), "entries were filtered as dynamic websites"))
+
+# Step 6.5 - Filter Global Excluded Sitemaps (manually verified non-article sources)
+# These are structurally valid but contain only keywords, finance data, cities or technical indexes.
+excluded_sitemaps <- c(
+  "https://www.nw.de/_retresco/sitemap/index.xml",                   # this sitemap contains topics and not articles
+  "https://www.presseportal.de/sitemap-de-index-keywords.xml",       # this sitemap contains keywords and not articles
+  "https://www.presseportal.de/sitemap-de-index-newsrooms.xml",      # this sitemap contains advertisements and not articles
+  "https://www.presseportal.de/sitemap-de-index-cities.xml",         # this sitemap contains topics by region and not articles
+  "https://www.tag24.de/sitemap_tag24_d.xml",                        # this sitemap contains deleted articles 
+  "https://www.finanzen.net/sitemap/sitemap.xml",                    # this sitemap contains financial news tickers and not articles
+  "https://www.finanzen.net/xml/google-sitemaps/google_sitemap.xml", # this sitemap contains financial news tickers and not articles
+  "https://www.finanzen.net/ratgeber/sitemap_index.xml"              # this sitemap contains financial news tickers and not articles
+)
+
+# Filter entries matching the global exclusion list
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  mutate(filtered_because = ifelse(sitemap_URL %in% excluded_sitemaps, "excluded_sitemaps", NA))
+
+# Create filtered DataFrame
+filtered_global_step_6_excluded_sitemaps_df <- step_6_cleaned_df %>%
+  filter(!is.na(filtered_because))
+
+# Remove excluded entries from the main DataFrame
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  filter(is.na(filtered_because)) %>%
+  select(-filtered_because)
+
+# Output summary
+print(paste(nrow(filtered_global_step_6_excluded_sitemaps_df), "entries had other non related content"))
+
+# Remove entries with missing sitemap_URL and create missing_sitemap_url df
+missing_sitemap_url <- step_6_cleaned_df %>% filter(is.na(sitemap_URL)) %>% mutate(filtered_because = "missing sitemap URL")
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(!is.na(sitemap_URL))
+print(paste(nrow(missing_sitemap_url), "entries had missing sitemap_URL and have been removed"))
+
+# Remove entries with missing sitemap_content and create missing_sitemap_content df
+missing_sitemap_content <- step_6_cleaned_df %>% filter(is.na(sitemap_content)) %>% mutate(filtered_because = "missing sitemap content")
+step_6_cleaned_df <- step_6_cleaned_df %>% filter(!is.na(sitemap_content))
+print(paste(nrow(missing_sitemap_content), "entries had missing sitemap_content and have been removed"))
+
+# Combine missing_sitemap_url and missing_sitemap_content into failed_sitemaps
+failed_sitemaps <- bind_rows(missing_sitemap_url, missing_sitemap_content)
+print(paste(nrow(failed_sitemaps), "entries are in the failed_sitemaps dataset"))
+
+# Combine all filtered datasets into export_broken_sitemaps
+export_broken_sitemaps <- bind_rows(
+  filtered_media_sitemaps_df, 
+  filtered_html_sitemaps_df, 
+  filtered_dynamic_sitemaps_df,
+  failed_sitemaps
+)
+
+# Adjusting sitemap_check
+step_6_cleaned_df <- step_6_cleaned_df %>%
+  group_by(domain_url) %>%
+  mutate(sitemap_check = ifelse(n() == 1, "one sitemap", "multiple sitemaps")) %>%
+  ungroup()
+
+### Exporting all data:
+
+# p1 all sitemaps: 
+p1_all_sitemaps <- bind_rows(step_6_cleaned_df, export_broken_sitemaps)
+write.csv(p1_all_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_all_sitemaps.csv", row.names = FALSE)
+
+# p1 clean sitemaps: 
+p1_clean_sitemaps <- step_6_cleaned_df %>%
+  transmute(
+    domain_id = as.numeric(factor(domain_url)),         
+    domain_url = domain_url,
+    layer_1_url = sitemap_URL
+  ) %>%
+  mutate(layer_1_url_id = row_number()) %>%            
+  select(domain_id, domain_url, layer_1_url_id, layer_1_url)
+write.csv(p1_clean_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/data/p1_clean_sitemaps.csv", row.names = FALSE) 
+
+
+# p1 excluded sitemaps:
+p1_excluded_sitemaps <- bind_rows(
+  
+  filtered_media_sitemaps_df  %>% mutate(reason = "media sitemap - images, videos, podcasts"),
+  filtered_irrelevant_sitemaps_df %>% mutate(reason = "irrelevant sitemap - e.g. authors, shop, sport"),
+  filtered_html_sitemaps_df  %>% mutate(reason = "entries had HTML contents in sitemap and have been filtered"),
+  filtered_global_step_6_excluded_sitemaps_df %>% mutate(reason = "entries had other non related content"),
+  missing_sitemap_url        %>% mutate(reason = "entries had missing sitemap_URL and have been removed"),
+  missing_sitemap_content    %>% mutate(reason = "entries had missing sitemap_content and have been removed")
+) %>%
+  transmute(
+    type = "sitemap",
+    domain = domain_url,
+    link = sitemap_URL,
+    reason = reason
+  ) %>%
+  bind_rows(
+    
+    filtered_dynamic_sitemaps_df %>%
+      mutate(reason = "entries were filtered as dynamic websites") %>%
+      transmute(
+        type = "domain",
+        domain = domain_url,
+        link = domain_url,
+        reason = reason
+      )
+  )
+
+write.csv(p1_excluded_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_excluded_sitemaps.csv", row.names = FALSE)
+
+# Summary 
+print(paste(nrow(p1_all_sitemaps), "total entries exported to: p1_all_sitemaps"))
+print(paste(nrow(p1_clean_sitemaps), "clean entries exported to: p1_clean_sitemaps"))
+print(paste(nrow(p1_excluded_sitemaps), "excluded entries exported to: p1_excluded_sitemaps"))
+
+
+```
+
+
+# Step 7:
+## This code chunk looks over the whole code and produces a report for every step and prints a deubg file.
+### This code runs locally. 
+```{r Step 7 }
+step_7_generate_final_report <- function() {
+  # Create overall summary table
+  step_7_overall_summary <- data.frame(
+    Step = c(
+      "Step 1: Robots.txt URLs Retrieval",
+      "Step 2: Robots.txt Contents Retrieval",
+      "Step 3: Sitemap URLs Extraction from Robots.txt",
+      "Step 4: Typical Sitemap URLs Retrieval",
+      "Step 5: Sitemap Contents Retrieval",
+      "Step 6: Final Data"
+    ),
+    Total_Items = c(
+      nrow(global_input_all_domains),
+      nrow(step_1_domain_urls_robotsUrls_df),
+      nrow(step_2_domain_Urls_robotsUrls_robotsContents_df),
+      nrow(if (exists("step_4_1_missing_sitemaps_df")) step_4_1_missing_sitemaps_df else data.frame()),
+      nrow(if (exists("step_5_valid_sitemaps_check")) step_5_valid_sitemaps_check else data.frame()),
+      nrow(step_6_cleaned_df)
+    ),
+    Successful = c(
+      sum(!is.na(step_1_domain_urls_robotsUrls_df$robots_txt)),
+      sum(!is.na(step_2_domain_Urls_robotsUrls_robotsContents_df$robots_txt_content)),
+      sum(step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df$sitemap_check != "no sitemap"),
+      sum(if (exists("step_4_1_missing_sitemaps_df")) !is.na(step_4_1_missing_sitemaps_df$sitemap_URL) else 0),
+      sum(if (exists("step_5_valid_sitemaps_check")) !is.na(step_5_valid_sitemaps_check$sitemap_content) else 0),
+      sum(!is.na(step_6_cleaned_df$sitemapUrls))
+    ),
+    Partially_Successful = c(
+      sum(is.na(step_1_domain_urls_robotsUrls_df$robots_txt)),
+      sum(is.na(step_2_domain_Urls_robotsUrls_robotsContents_df$robots_txt_content)),
+      sum(step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df$sitemap_check == "no sitemap"),
+      sum(if (exists("step_4_1_missing_sitemaps_df")) is.na(step_4_1_missing_sitemaps_df$sitemap_URL) else 0),
+      sum(if (exists("step_5_valid_sitemaps_check")) is.na(step_5_valid_sitemaps_check$sitemap_content) else 0),
+      sum(is.na(step_6_cleaned_df$sitemapUrls))
+    )
+  )
+
+  # Standardize and combine debug DataFrames
+  format_debug_df <- function(df, step_name) {
+    if (!is.null(df) && nrow(df) > 0) {
+      # Define a standard column structure
+      standard_columns <- c("Step", "domain_url", "robots_txt", "sitemap_URL", "issue", "note")
+      
+      # Ensure all required columns exist
+      df <- df %>%
+        mutate(
+          Step = step_name,
+          domain_url = if (!"domain_url" %in% colnames(df)) NA else domain_url,
+          robots_txt = if (!"robots_txt" %in% colnames(df)) NA else robots_txt,
+          sitemap_URL = if (!"sitemap_URL" %in% colnames(df)) NA else sitemap_URL,
+          issue = if (!"issue" %in% colnames(df)) NA else issue,
+          note = if (!"note" %in% colnames(df)) NA else note
+        )
+      
+      # Reorder columns to match the standard structure
+      df <- df[, standard_columns]
+      return(df)
+    }
+    return(NULL)
+  }
+
+  # Format all debug DataFrames
+  debug_dfs <- list(
+    if (exists("step_1_1_debug_unsuccsesful_fetches_df")) format_debug_df(step_1_1_debug_unsuccsesful_fetches_df, "Step 1"),
+    if (exists("step_2_1_debug_unsuccsesful_fetches_df")) format_debug_df(step_2_1_debug_unsuccsesful_fetches_df, "Step 2"),
+    if (exists("step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df")) format_debug_df(
+      step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df %>%
+        filter(sitemap_check == "no sitemap") %>%
+        mutate(issue = "No sitemap URL"),
+      "Step 3"
+    ),
+    if (exists("step_4_1_missing_sitemaps_df")) format_debug_df(
+      step_4_1_missing_sitemaps_df %>%
+        filter(is.na(sitemap_URL)) %>%
+        mutate(issue = "No typical sitemap URL found"),
+      "Step 4"
+    ),
+    if (exists("step_5_1_debug_unsuccsesful_fetches_df")) format_debug_df(step_5_1_debug_unsuccsesful_fetches_df, "Step 5")
+  )
+
+  # Combine all debug DataFrames
+  step_7_debug_data <- do.call(rbind, Filter(Negate(is.null), debug_dfs))
+
+  # Save debug data if available
+  if (!is.null(step_7_debug_data) && nrow(step_7_debug_data) > 0) {
+    write.csv(step_7_debug_data,"/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_debug_sitemap_data.csv", row.names = FALSE)
+  }
+
+
+# Generate Markdown report content with "X of Y" formatting
+# Generate Markdown report content with "X of Y" formatting
+step_7_report_content <- c(
+  "# Final Report",
+  "## Overall Summary",
+  knitr::kable(step_7_overall_summary, format = "markdown"),
+  "## Detailed Metrics",
+  paste("### Step 1:", paste(sum(!is.na(step_1_domain_urls_robotsUrls_df$robots_txt)), "of", nrow(step_1_domain_urls_robotsUrls_df), "robots.txt URLs retrieved")),
+  paste("### Step 2:", paste(sum(!is.na(step_2_domain_Urls_robotsUrls_robotsContents_df$robots_txt_content)), "of", nrow(step_2_domain_Urls_robotsUrls_robotsContents_df), "robots.txt contents retrieved")),
+  paste("### Step 3:", paste(sum(step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df$sitemap_check != "no sitemap"), "of", nrow(step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df), "sitemap URLs extracted")),
+  paste("### Step 4:", paste(sum(!is.na(step_4_1_missing_sitemaps_df$sitemap_URL)), "of", nrow(step_4_1_missing_sitemaps_df), "typical sitemap URLs found")),
+  paste("### Step 5:", paste(sum(!is.na(step_5_valid_sitemaps_check$sitemap_content)), "of", nrow(step_5_valid_sitemaps_check), "sitemap contents retrieved")),
+  paste("### Step 6: Final dataset includes", paste(nrow(step_6_cleaned_df), "of", nrow(step_6_cleaned_df), "domains")),
+
+  # --- New: Domain summary statistics ---
+  "## Domain-Level Summary",
+  paste("### Input domains:", length(unique(global_input_all_domains$domain_url))),
+  paste("### Domains with valid sitemaps:", length(unique(step_6_cleaned_df$domain_url))),
+  paste("### Domains without sitemaps:", 
+        length(setdiff(unique(global_input_all_domains$domain_url), unique(step_6_cleaned_df$domain_url))))
+)
+
+# Save and render report
+step_7_report_path <- "/Users/zorbeyozcan/HA_NewsMedia/data/clean_data/output_data/p1_report_sitemap_scraper.md"
+writeLines(step_7_report_content, step_7_report_path)
+rmarkdown::render(step_7_report_path, output_format = "pdf_document")
+
+print("Final report and debug file created successfully.")
+  
+}
+
+# Execute the final report generation function
+step_7_generate_final_report()
+
+```
+
+
+# Step 8:
+## This code chunk deletes every unnecessary value, function or data.frame in the environment. 
+### This code runs locally. 
+```{r Step 8 , warning=FALSE}
+
+# Step 5 cleanup
+rm(step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents, 
+   step_5_1_debug_unsuccsesful_fetches_df, step_5_get_sitemap_content_func, 
+   step_5_valid_sitemaps_check, step_5_total_valid_sitemaps_check, 
+   step_5_loaded_valid_sitemaps_check, domains_with_successful_sitemaps)
+
+# Step 6 cleanup (Keep only the four export data frames)
+rm(step_6_cleaned_df, step_6_cleaned_df_fast, step_6_output_path, 
+   filtered_media_sitemaps_df, filtered_global_excluded_sitemaps_df, filtered_irrelevant_sitemaps_df,
+   filtered_html_sitemaps_df, filtered_global_step_6_excluded_sitemaps_df,
+   filtered_dynamic_sitemaps_df, missing_sitemap_url, missing_sitemap_content, 
+   failed_sitemaps, all_sitemap_data, export_broken_sitemaps, excluded_domains_df)
+
+# Step 7 cleanup
+rm(step_7_overall_summary, step_7_debug_data, step_7_generate_final_report, 
+   step_7_report_path, step_7_report_content, debug_dfs, format_debug_df)
+
+# Remove any remaining functions or variables that were not explicitly removed
+rm(list = ls(pattern = "^step_"))
+
+print("All functions, values, and data frames have been removed successfully.")
+
+```
+
+
+

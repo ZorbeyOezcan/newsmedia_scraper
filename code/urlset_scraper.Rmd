@@ -1,0 +1,2181 @@
+---
+title: "urlset_scraper"
+author: "Zorbey Özcan"
+date: "2025-05-24"
+output: html_document
+---
+
+```{r Step 1: Setup and load required packages}
+# knitting Options 
+knitr::opts_chunk$set(
+  echo    = TRUE,       
+  message = FALSE,  
+  warning = FALSE    
+)
+
+# Load necessary libraries for data manipulation, HTTP requests, XML parsing, and logging
+library(tidyverse)
+library(httr)
+library(xml2)
+library(stringr)
+library(purrr)
+library(gridExtra)
+library(grid)
+library(data.table)
+library(futile.logger)
+library(lubridate)
+
+# Create the output folder if it does not exist
+step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
+if (!dir.exists(step_1_output_folder)) {
+  dir.create(step_1_output_folder)
+}
+
+step_1_logging_folder <- "/Users/zorbeyozcan/newsmedia_scraper/documentation"
+if (!dir.exists(step_1_logging_folder)) {
+  dir.create(step_1_logging_folder)
+}
+
+
+cat("Step 1 completed: Packages loaded and output folder created.\n")
+
+```
+
+```{r Step 2: Load Input CSV File}
+# Load the input CSV file into a data.table using fread
+step_2_input_dt <- fread("/Users/zorbeyozcan/newsmedia_scraper/data/p1_clean_sitemaps.csv", stringsAsFactors = FALSE)
+cat("Step 2 completed: Input CSV file loaded.\n")
+
+```
+
+```{r Step 3: Set Global Parameters, Exclusions, and User Agents}
+# Set global variables for the date range
+global_date_start <- as.Date("2025-01-28")
+global_date_end   <- as.Date("2025-02-02")
+
+# Set global list of excluded strings (URLs containing these strings will be excluded)
+global_excluded_strings <- c(
+  "image", "bilder", "picture", "fotografie", "photo", "foto", "imagegallery", "gallery",
+  "video", "media", "audio", "podcasts", "podcast",       
+  "themen.*-az", "author", "sport", "shop", "security"    
+)
+
+# Retrieve the current VPN IP address and trim any whitespace
+global_vpn_ip <- trimws(suppressWarnings(readLines("https://ifconfig.me/ip")))
+
+# Define global user agent profiles
+global_user_agent_profile_1 <- "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+global_user_agent_profile_2 <- "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_6_8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.129 Safari/537.36"
+global_user_agent_profile_3 <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.94 Safari/537.36"
+global_user_agent_profile_4 <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.92 Safari/537.36"
+global_user_agent_profile_5 <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0"
+
+# Create global user agent rotation list
+global_user_agent_list <- c(
+  global_user_agent_profile_1,
+  global_user_agent_profile_2,
+  global_user_agent_profile_3,
+  global_user_agent_profile_4,
+  global_user_agent_profile_5
+)
+
+
+cat("Step 3 completed: Global parameters, excluded lists, VPN IP, and user agents initialized.\n")
+```
+
+```{r Step 4: Create Global Data Tables for Error Logging, Retry Handling, and Master Rotation Tracking}
+# Create the global error data table for non-response-based sitemap processing errors
+global_error_dt <- data.table(
+  domain_id              = integer(),      # Unique ID for the domain
+  domain_url             = character(),    # Domain URL
+  layer_1_url_id         = integer(),      # Unique ID for the top-level sitemap
+  layer_1_url            = character(),    # Top-level sitemap URL
+  error_url_id           = integer(),      # ID of the problematic sub-URL (from progression)
+  error_url              = character(),    # Sub-sitemap or link that caused the error
+  parent_url_id          = integer(),      # Optional: ID of the parent sitemap URL
+  root_tag               = character(),    # Root tag if known ("urlset", "sitemapindex", "unknown", etc.)
+  error_category         = character(),    # Class of error (e.g. "xml_parse_error", "excluded_string", "missing_root_tag", ...)
+  processed_flag         = logical(),      # Was this URL marked as processed in progression_dt?
+  retry_flag             = logical(),      # Should the entry be retried? 
+  timestamp              = as.POSIXct(character()),  # Timestamp of logging
+  source_function        = character(),    # Where the error was triggered (e.g. "step_6", "step_8", "step_9")
+  status_code            = integer()       # HTTP status if applicable
+)
+
+# Create the global master data table for tracking the overall status of each sitemap/domain
+global_master_dt <- data.table(
+  domain_id              = integer(),      # Unique ID for the domain
+  domain_url             = character(),    # Domain URL
+  layer_1_url_id         = integer(),      # Unique ID for the sitemap
+  layer_1_url            = character(),    # Sitemap URL
+  input_processing_status= character(),    # Current status (e.g., "ok", "suspicious", "moved to retry")
+  total_request_count    = integer(),      # Tracks requests for an input sitemap
+  total_urslets_scraped  = integer(),      # Tracks total urlsets scraped
+  last_checked           = as.POSIXct(character()),  # Timestamp of the last check
+  current_user_agent_id  = integer(),      # ID of the currently used User-Agent profile
+  processing_flag        = character()     # Indicates processing status of the input
+)
+
+cat("Step 4 completed: Global error and master data tables created.\n")
+
+```
+
+```{r Step 5: Defining date-check helper functions:}
+# Function: step_5_1_date_check_urlset_func
+# This function extracts <lastmod> tags from a URLset XML document,
+# converts them to dates, and checks if any date falls within the specified date range.
+# It returns a list with a decision ("proceed" or "exclude"), a reason, and a representative detected date.
+step_5_1_date_check_urlset_func <- function(xml_doc, ns_map, date_from, date_to) {
+  # Extract the text of all <lastmod> tags using the provided namespace map
+  step_5_1_lastmods <- xml_find_all(xml_doc, ".//ns:lastmod", ns = ns_map) %>% xml_text()
+  # Remove any time portion and convert to Date objects
+  step_5_1_lastmod_dates <- as.Date(gsub("T.*", "", step_5_1_lastmods), format = "%Y-%m-%d")
+  # Remove NA dates
+  step_5_1_lastmod_dates <- step_5_1_lastmod_dates[!is.na(step_5_1_lastmod_dates)]
+  
+  if (length(step_5_1_lastmod_dates) == 0) {
+    return(list(decision = "proceed", reason = "no_lastmod_found", detected_date = NA))
+  }
+  
+  if (any(step_5_1_lastmod_dates >= date_from & step_5_1_lastmod_dates <= date_to)) {
+    # Use the minimum date that falls within the range as a representative detected date
+    step_5_1_detected_date <- min(step_5_1_lastmod_dates[step_5_1_lastmod_dates >= date_from & step_5_1_lastmod_dates <= date_to])
+    return(list(decision = "proceed", reason = "in_range", detected_date = step_5_1_detected_date))
+  } else {
+    return(list(decision = "exclude", reason = "out_of_range", detected_date = NA))
+  }
+}
+
+# Function: step_5_2_date_check_link_func
+# This function checks a URL string for date patterns using regular expressions.
+# It determines whether the detected date (if any) falls within the specified date range.
+# It returns a list with a decision, a reason, and the detected date.
+step_5_2_date_check_link_func <- function(url, date_from, date_to) {
+
+  step_5_2_url_clean <- tolower(url)
+
+  if (is.null(url) || length(url) != 1 || is.na(url) || !nzchar(url)) {
+    return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+  }
+
+  # valid seperators 
+  sep <- "[-_\\/]"
+  
+  # Year only 
+  step_5_2_year_pattern <- "(?<!\\d)((?:19|20)\\d{2})(?!\\d)"
+  
+  # YYYY<sep>MM<sep>DD
+  step_5_2_year_month_day_pattern <- paste0(
+    "(?<!\\d)",
+    "((?:19|20)\\d{2})", sep,
+    "(0[1-9]|1[0-2])",      sep,
+    "(0[1-9]|[12][0-9]|3[01])",
+    "(?!\\d)"
+  )
+  
+  # YYYYMMDD compact
+  step_5_2_compact_year_month_day_pattern <- "(?<!\\d)((?:19|20)\\d{2})(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(?!\\d)"
+  
+  # YYYY<sep>MM
+  step_5_2_year_month_pattern <- paste0(
+    "(?<!\\d)",
+    "((?:19|20)\\d{2})", sep,
+    "(0[1-9]|1[0-2])",
+    "(?!\\d)"
+  )
+  
+  # YYYYMM compact
+  step_5_2_compact_year_month_pattern <- "(?<!\\d)((?:19|20)\\d{2})(0[1-9]|1[0-2])(?!\\d)"
+  
+  # MM<sep>YYYY
+  step_5_2_month_year_pattern <- paste0(
+    "(?<!\\d)",
+    "([1-9]|0[1-9]|1[0-2])", sep,
+    "((?:19|20)\\d{2})",
+    "(?!\\d)"
+  )
+  
+  # DD<sep>MM<sep>YYYY
+  step_5_2_day_month_year_pattern <- paste0(
+    "(?<!\\d)",
+    "(0[1-9]|[12][0-9]|3[01])", sep,
+    "(0[1-9]|1[0-2])",           sep,
+    "((?:19|20)\\d{2})",
+    "(?!\\d)"
+  )
+  
+  # DDMMYYYY compact
+  step_5_2_compact_day_month_year_pattern <- "(?<!\\d)([0-3][0-9])([0][1-9]|1[0-2])((?:19|20)\\d{2})(?!\\d)"
+
+  step_5_2_short_months <- c("jan", "feb", "mär", "mae", "mar", "apr", "mai", "may", "jun", "jul", "aug", "sep", "okt", "oct", "nov", "dez", "dec")
+  step_5_2_long_months <- c("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+                            "januar", "februar", "märz", "maerz", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "dezember")
+  step_5_2_all_months_pattern <- paste0("(", paste(c(step_5_2_short_months, step_5_2_long_months), collapse = "|"), ")")
+
+  step_5_2_monthname_year_pattern <- paste0(step_5_2_all_months_pattern, "(20\\d{2}|19\\d{2})")
+  step_5_2_year_monthname_pattern <- paste0("(20\\d{2}|19\\d{2})", step_5_2_all_months_pattern)
+
+  start_date <- end_date <- detected_date <- NA
+
+  # only Year
+  if (
+    str_detect(step_5_2_url_clean, step_5_2_year_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_year_month_day_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_compact_year_month_day_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_year_month_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_compact_year_month_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_month_year_pattern) &&
+    !str_detect(step_5_2_url_clean, step_5_2_monthname_year_pattern)
+  ) {
+    year <- as.integer(str_extract(step_5_2_url_clean, step_5_2_year_pattern))
+    start_date <- as.Date(sprintf("%04d-01-01", year))
+    end_date <- as.Date(sprintf("%04d-12-31", year))
+    detected_date <- start_date
+
+    if (start_date <= date_to && end_date >= date_from) {
+      return(list(decision = "proceed", reason = "in_range", 
+                  detected_date = detected_date, matched_pattern = "year_only", 
+                  start_date = start_date, end_date = end_date))
+    } else {
+      return(list(decision = "exclude", reason = "out_of_range",
+                  detected_date = detected_date, matched_pattern = "year_only",
+                  start_date = start_date, end_date = end_date))
+    }
+  }
+
+  # YYYY<sep>MM<sep>DD
+  if (str_detect(step_5_2_url_clean, step_5_2_year_month_day_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_year_month_day_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    # Use explicit matrix indexing
+    year  <- as.integer(parts[1,2])
+    month <- as.integer(parts[1,3])
+    day   <- as.integer(parts[1,4])
+    # Guard against NA
+    if (is.na(year) || is.na(month) || is.na(day)) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    max_day <- days_in_month(ymd(sprintf("%04d-%02d-01", year, month)))
+    if (!is.na(day) && day >= 1 && day <= max_day) {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ymd"
+    } else {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ym"
+    }
+    start_date <- detected_date
+    end_date   <- start_date + months(1) - days(1)
+
+  # YYYYMMDD compact
+  } else if (str_detect(step_5_2_url_clean, step_5_2_compact_year_month_day_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_compact_year_month_day_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    year  <- as.integer(parts[1,2])
+    month <- as.integer(parts[1,3])
+    day   <- as.integer(parts[1,4])
+    if (is.na(year) || is.na(month) || is.na(day)) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    max_day <- days_in_month(ymd(sprintf("%04d-%02d-01", year, month)))
+    if (!is.na(day) && day >= 1 && day <= max_day) {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ymd_compact"
+    } else {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ym"
+    }
+    start_date <- detected_date
+    end_date   <- start_date + months(1) - days(1)
+
+  # DD<sep>MM<sep>YYYY
+  } else if (str_detect(step_5_2_url_clean, step_5_2_day_month_year_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_day_month_year_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    day   <- as.integer(parts[1,2])
+    month <- as.integer(parts[1,3])
+    year  <- as.integer(parts[1,4])
+    if (is.na(year) || is.na(month) || is.na(day)) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    max_day <- days_in_month(ymd(sprintf("%04d-%02d-01", year, month)))
+    if (!is.na(day) && day >= 1 && day <= max_day) {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "dmy"
+    } else {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ym_fallback"
+    }
+    start_date <- detected_date
+    end_date   <- start_date + months(1) - days(1)
+
+  # DDMMYYYY compact
+  } else if (str_detect(step_5_2_url_clean, step_5_2_compact_day_month_year_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_compact_day_month_year_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    day   <- as.integer(parts[1,2])
+    month <- as.integer(parts[1,3])
+    year  <- as.integer(parts[1,4])
+    if (is.na(year) || is.na(month) || is.na(day)) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    max_day <- days_in_month(ymd(sprintf("%04d-%02d-01", year, month)))
+    if (!is.na(day) && day >= 1 && day <= max_day) {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "dmy_compact"
+    } else {
+      detected_date <- as.Date(sprintf("%04d-%02d-01", year, month))
+      pattern       <- "ym"
+    }
+    start_date <- detected_date
+    end_date   <- start_date + months(1) - days(1)
+  
+  # MM<sep>YYYY
+  } else if (str_detect(step_5_2_url_clean, step_5_2_month_year_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_month_year_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    month         <- as.integer(parts[2])
+    year          <- as.integer(parts[3])
+    start_date    <- as.Date(sprintf("%04d-%02d-01", year, month))
+    end_date      <- start_date + months(1) - days(1)
+    detected_date <- start_date
+    pattern       <- "month_year"
+  
+  # YYYY<sep>MM
+  } else if (str_detect(step_5_2_url_clean, step_5_2_year_month_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_year_month_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    year          <- as.integer(parts[2])
+    month         <- as.integer(parts[3])
+    start_date    <- as.Date(sprintf("%04d-%02d-01", year, month))
+    end_date      <- start_date + months(1) - days(1)
+    detected_date <- start_date
+    pattern       <- "ym"
+  
+  # YYYYMM compact
+  } else if (str_detect(step_5_2_url_clean, step_5_2_compact_year_month_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_compact_year_month_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    year          <- as.integer(parts[2])
+    month         <- as.integer(parts[3])
+    start_date    <- as.Date(sprintf("%04d-%02d-01", year, month))
+    end_date      <- start_date + months(1) - days(1)
+    detected_date <- start_date
+    pattern       <- "ym_compact"
+  
+  # Monthname + year
+  } else if (str_detect(step_5_2_url_clean, step_5_2_monthname_year_pattern)) {
+    parts <- str_match(step_5_2_url_clean, step_5_2_monthname_year_pattern)
+    if (any(is.na(parts))) {
+      return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+    }
+    month_name     <- tolower(parts[2])
+    year           <- as.integer(parts[3])
+    month_number   <- match(month_name, tolower(c(step_5_2_short_months, step_5_2_long_months)))
+    if (month_number > length(step_5_2_short_months)) month_number <- month_number - length(step_5_2_short_months)
+    start_date     <- as.Date(sprintf("%04d-%02d-01", year, month_number))
+    end_date       <- start_date + months(1) - days(1)
+    detected_date  <- start_date
+    pattern        <- "monthname_year"
+    
+  # only year (fallback)
+  } else if (str_detect(step_5_2_url_clean, step_5_2_year_pattern)) {
+    parts         <- str_match(step_5_2_url_clean, step_5_2_year_pattern)
+    year          <- as.integer(parts[2])
+    detected_date <- as.Date(sprintf("%04d-01-01", year))
+    start_date    <- detected_date
+    end_date      <- detected_date + years(1) - days(1)
+    pattern       <- "year_only"
+
+  } else {
+    return(list(decision = "proceed", reason = "no_date", detected_date = NA, matched_pattern = "none"))
+  }
+  
+  # Overlap logic with global date range 
+  if (start_date <= date_to && end_date >= date_from) {
+    return(list(decision = "proceed", reason = "in_range", detected_date = detected_date, matched_pattern = pattern, start_date = start_date, end_date = end_date))
+  } else {
+    return(list(decision = "exclude", reason = "out_of_range", detected_date = detected_date, matched_pattern = pattern, start_date = start_date, end_date = end_date))
+  }
+}
+
+cat("Step 5 completed: Date check functions defined.\n")
+
+```
+
+```{r Step 6: Defining sorting functions:}
+# Function: step_6_1_grouping_func
+# This function takes a data.table of links marked as 'no_date' and attempts to group them into pagination groups based on similar basename patterns.
+# If a group has fewer than 10 entries or missing numeric indicators, it is flagged as 'individual'; else a pagination_group and pagination_index are assigned.
+
+step_6_1_grouping_func <- function(step_6_1_links_dt,
+                                   domain_id,
+                                   domain_url,
+                                   layer_1_url_id,
+                                   layer_1_url,
+                                   parent_url_id) {
+
+  # Extract key and number
+  step_6_1_links_dt[, group_key := str_replace(basename(link), "-\\d+(?=\\.xml$)", "")]
+  step_6_1_links_dt[, group_num := as.integer(str_extract(basename(link), "\\d+(?=\\.xml$)"))]
+
+  # Init columns
+  step_6_1_links_dt[, `:=`(
+    pagination_group = NA_character_,
+    pagination_index = NA_integer_
+  )]
+
+  # Identify valid groups
+  group_counts <- step_6_1_links_dt[!is.na(group_num), .N, by = group_key]
+  valid_groups <- group_counts[N >= 5, group_key]
+
+  for (g in valid_groups) {
+    idx <- which(step_6_1_links_dt$group_key == g)
+    ordered_idx <- idx[order(step_6_1_links_dt$group_num[idx])]
+
+    group_links <- step_6_1_links_dt$link[ordered_idx]
+
+    # Update progression for each group member
+    for (i in seq_along(group_links)) {
+      step_7_1_progression_update(
+        domain_id         = domain_id,
+        domain_url        = domain_url,
+        layer_1_url_id    = layer_1_url_id,
+        layer_1_url       = layer_1_url,
+        current_url       = group_links[i],
+        parent_url_id     = parent_url_id,
+        pagination_group  = g,
+        pagination_index  = i,
+        pagination_group_status = "candidate"
+      )
+    }
+  }
+  return(step_6_1_links_dt)
+}
+
+step_6_sorting_func <- function(step_6_links_vector, 
+                                layer_1_url_id, 
+                                layer_1_url,          
+                                parent_url, 
+                                parent_url_id,
+                                global_date_start, 
+                                global_date_end, 
+                                global_excluded_strings,
+                                domain_id = NA_integer_,
+                                domain_url = NA_character_) {
+  
+  prog_name <- paste0("sitemap_id_", layer_1_url_id, "_progression_dt")
+
+  # Initialize internal data.table
+  step_6_sort_list_dt <- data.table::data.table(
+    link = step_6_links_vector,
+    in_range = NA_character_,
+    excluded = NA_character_,
+    sort_place = NA_integer_,
+    pagination_group = NA_character_,
+    pagination_index = NA_integer_
+  )
+  
+  # Exclude links containing excluded strings
+  excluded_pattern <- paste(global_excluded_strings, collapse = "|")
+  step_6_sort_list_dt[stringr::str_detect(link, excluded_pattern), excluded := "by_string"]
+  
+  # Apply date check on remaining links
+  for (i in which(is.na(step_6_sort_list_dt$excluded))) {
+    check_result <- step_5_2_date_check_link_func(step_6_sort_list_dt$link[i], global_date_start, global_date_end)
+    
+    if (check_result$reason == "out_of_range") {
+      step_6_sort_list_dt[i, excluded := "by_date"]
+    } else if (check_result$reason == "in_range") {
+      step_6_sort_list_dt[i, `:=`(in_range = "yes", excluded = "no")]
+    } else {
+      step_6_sort_list_dt[i, `:=`(in_range = "unknown", excluded = "no")]
+    }
+  }
+  
+  # Group only the “no-date” links into pagination groups of size ≥10
+  subset_idx <- which(
+  step_6_sort_list_dt$excluded == "no" &
+  step_6_sort_list_dt$in_range == "unknown"
+  )
+  
+  subset_dt  <- step_6_sort_list_dt[subset_idx]
+  grouped_dt <- step_6_1_grouping_func(
+    step_6_1_links_dt = subset_dt,
+    domain_id         = domain_id,
+    domain_url        = domain_url,
+    layer_1_url_id    = layer_1_url_id,
+    layer_1_url       = layer_1_url,
+    parent_url_id     = parent_url_id
+  )
+  
+  step_6_sort_list_dt[subset_idx, pagination_group := grouped_dt$pagination_group]
+  step_6_sort_list_dt[subset_idx, pagination_index := grouped_dt$pagination_index]
+  
+  # Assign sort_places for in-range links
+  step_6_sort_list_dt[in_range == "yes", 
+    sort_place := seq_len(.N)
+  ]
+
+  next_base <- function(dt) {
+    mx <- suppressWarnings(max(dt$sort_place, na.rm = TRUE))
+    if (!is.finite(mx)) 0L else mx
+  }
+  
+  # grouped no-date links (in_range == "unknown")
+   remaining_dt <- step_6_sort_list_dt[
+    excluded == "no" & in_range == "unknown" &
+    is.na(pagination_group)
+  ]
+  if (nrow(remaining_dt) > 0) {
+    start <- next_base(step_6_sort_list_dt)
+    step_6_sort_list_dt[link %in% remaining_dt$link,
+      sort_place := start + seq_len(nrow(remaining_dt))
+    ]
+  }
+  
+  # ungrouped no-date links
+  grouped_dt <- step_6_sort_list_dt[
+    excluded == "no" & in_range == "unknown" &
+    !is.na(pagination_group)
+  ][order(pagination_group, pagination_index)]
+  if (nrow(grouped_dt) > 0) {
+    start <- next_base(step_6_sort_list_dt)
+    step_6_sort_list_dt[link %in% grouped_dt$link,
+      sort_place := start + seq_len(nrow(grouped_dt))
+    ]
+  }
+  
+  # Mark excluded links as processed
+  step_6_sort_list_dt[excluded == "by_string", `:=`(
+    processed = TRUE,
+    processing_status = "excluded_by_string",
+    sorted = "excluded"
+  )]
+  step_6_sort_list_dt[excluded == "by_date", `:=`(
+    processed = TRUE,
+    processing_status = "excluded_by_date",
+    sorted = "excluded"
+  )]
+  
+  # Mark remaining as unprocessed 
+  step_6_sort_list_dt[is.na(processed), processed := FALSE]
+  step_6_sort_list_dt[is.na(processing_status), processing_status := "in_progress"]
+  step_6_sort_list_dt[is.na(sorted), sorted := "yes"]
+  
+  # updateing sorted sitemap
+  parent_row_id <- get(prog_name, envir = .GlobalEnv)[current_url == parent_url, current_url_id]
+
+  step_7_1_progression_update(
+    domain_id      = domain_id,
+    domain_url     = domain_url,
+    layer_1_url_id = layer_1_url_id,
+    layer_1_url    = layer_1_url,   
+    current_url    = parent_url,    
+    parent_url_id  = parent_url_id, 
+    processing_status = "subsitemap_sorted",
+    root_tag          = "sitemapindex",
+    subsitemap_status = "in_progress",
+    subsitemap_progress = paste0("0 of ", nrow(step_6_sort_list_dt)),
+    sort_order       = list(step_6_sort_list_dt)
+  )
+  
+  # child link entries
+  for (i in seq_len(nrow(step_6_sort_list_dt))) {
+    row <- step_6_sort_list_dt[i]
+  
+    step_7_1_progression_update(
+      domain_id        = domain_id,
+      domain_url       = domain_url,
+      layer_1_url_id   = layer_1_url_id,
+      layer_1_url      = layer_1_url,
+      current_url      = row$link,
+      parent_url_id    = parent_row_id,        
+      in_range         = row$in_range,
+      root_tag         = "unknown",
+      sort_place       = row$sort_place,
+      pagination_group = row$pagination_group,
+      pagination_index = row$pagination_index,
+      processed        = row$processed,
+      processing_status= row$processing_status,
+      sorted           = row$sorted
+    )
+  }
+  
+  return(step_6_sort_list_dt)
+}
+
+cat("Step 6 completed: Sorting function defined.\n")
+
+```
+
+```{r Step 7: Defining core functions for processing sitemaps:}
+# The function step_7_1_progression_update  updates the progression data table for a sitemap.
+# It inserts new entries or updates existing ones, applies defaults,
+# updates subsitemap_progress, and marks fully processed parents.
+
+step_7_1_progression_update <- function(
+  domain_id,
+  domain_url,
+  layer_1_url_id,
+  layer_1_url,
+  current_url,
+  parent_url_id = NA_integer_,
+  root_tag = "unknown",
+  processed = FALSE,
+  processing_status = "in_progress",
+  sorted = "no",
+  sort_place = NA_integer_,
+  in_range = "unknown",
+  subsitemap_status = "in_progress",
+  sort_order = list(data.table()),
+  subsitemap_progress = "in_progress",
+  pagination_group = NA_character_,
+  pagination_index = NA_integer_,
+  pagination_group_status = NA_character_
+) {
+  rt <- root_tag
+  step_7_progression_dt_name <- paste0("sitemap_id_", layer_1_url_id, "_progression_dt")
+
+  # create new if not existing 
+  if (!exists(step_7_progression_dt_name, envir = .GlobalEnv)) {
+    assign(step_7_progression_dt_name, data.table(
+      domain_id                    = integer(),
+      domain_url                   = character(),
+      layer_1_url_id               = integer(),
+      layer_1_url                  = character(),
+      current_url_id               = integer(),
+      current_url                  = character(),
+      parent_url_id                = integer(),
+      processed                    = logical(),
+      processing_status            = character(),
+      sorted                       = character(),
+      sort_place                   = integer(),
+      in_range                     = character(),
+      root_tag                     = character(),
+      subsitemap_status            = character(),
+      sort_order                   = list(data.table()),
+      subsitemap_progress          = character(),
+      pagination_group             = character(),
+      pagination_index             = integer(),
+      pagination_group_status      = character(),
+      timestamp                    = as.POSIXct(character())
+    ), envir = .GlobalEnv)
+  }
+
+  step_7_progression_dt <- get(step_7_progression_dt_name, envir = .GlobalEnv)
+  if (!"pagination_group_status" %in% colnames(step_7_progression_dt)) {
+    step_7_progression_dt[, pagination_group_status := NA_character_]
+  }
+  existing_idx <- which(step_7_progression_dt$current_url == current_url)
+
+  # update existing with root tag "urlset" or "unknown" 
+  if (length(existing_idx) > 0) {
+    new_rt <- rt
+    step_7_progression_dt[existing_idx, `:=`(
+      domain_id          = domain_id,
+      domain_url         = domain_url,
+      layer_1_url_id     = layer_1_url_id,
+      layer_1_url        = layer_1_url,
+      parent_url_id      = parent_url_id,
+      processed          = ..processed,
+      processing_status  = ..processing_status,
+      sorted             = sorted,
+      sort_place         = sort_place,
+      in_range           = ..in_range,
+      root_tag           = ifelse(step_7_progression_dt$root_tag[existing_idx] == "unknown",
+                                  new_rt,
+                                  step_7_progression_dt$root_tag[existing_idx]),
+      
+      subsitemap_status            = ifelse(rt %in% c("urlset","unknown"),
+                                             "not_a_sitemap",
+                                             subsitemap_status),
+      
+      sort_order                   = list(data.table()),
+      
+      subsitemap_progress          = ifelse(rt %in% c("urlset","unknown"),
+                                             "not_a_sitemap",
+                                             subsitemap_progress),
+      
+      pagination_group             = ifelse(!is.na(..pagination_group),
+                                   ..pagination_group,
+                                   pagination_group),
+      
+      pagination_index             = ifelse(!is.na(..pagination_index),
+                                   ..pagination_index,
+                                   pagination_index),
+      
+      pagination_group_status     = ifelse(!is.na(..pagination_group_status),
+                                   ..pagination_group_status,
+                                   pagination_group_status),
+      
+      timestamp                    = Sys.time()
+    )]
+    
+    
+  }
+  
+  if (!is.null(pagination_group_status) && length(existing_idx) > 0) {
+  step_7_progression_dt[existing_idx, pagination_group_status := pagination_group_status]
+}
+  
+  else {
+    
+    # add new row 
+    new_id <- if (nrow(step_7_progression_dt) == 0) 1 else max(step_7_progression_dt$current_url_id, na.rm = TRUE) + 1
+    step_7_new_row <- data.table(
+      domain_id                    = domain_id,
+      domain_url                   = domain_url,
+      layer_1_url_id               = layer_1_url_id,
+      layer_1_url                  = layer_1_url,
+      current_url_id               = new_id,
+      current_url                  = current_url,
+      parent_url_id                = parent_url_id,
+      processed                    = processed,
+      processing_status            = processing_status,
+      sorted                       = sorted,
+      sort_place                   = sort_place,
+      in_range                     = in_range,
+      root_tag                     = rt,
+      subsitemap_status            = ifelse(rt %in% c("urlset","unknown"),
+                                             "not_a_sitemap",
+                                             subsitemap_status),
+      sort_order                   = list(data.table()),
+      subsitemap_progress          = ifelse(rt %in% c("urlset","unknown"),
+                                             "not_a_sitemap",
+                                             subsitemap_progress),
+      pagination_group             = pagination_group,
+      pagination_index             = pagination_index,
+      pagination_group_status      = pagination_group_status,
+      timestamp                    = Sys.time()
+    )
+    step_7_progression_dt <- rbind(step_7_progression_dt, step_7_new_row, fill = TRUE)
+  }
+
+  ## Override if roottag "sitemapindex"
+  parent_indices <- which(step_7_progression_dt$root_tag == "sitemapindex")
+  status_ok  <- c("excluded_by_string","excluded_by_date","scraped","all_child_links_processed")
+  status_err <- c("response_error","xml_error","unsupported_root_tag","all_processed_some_errors")
+
+  for (p_idx in parent_indices) {
+    kids  <- step_7_progression_dt[parent_url_id == step_7_progression_dt$current_url_id[p_idx]]
+    stats <- kids$processing_status
+    n_kids <- length(stats)
+    processed_count <- sum(stats %in% c(status_ok, status_err))
+
+      
+    if (n_kids > 0 && all(stats %in% status_ok)) {
+      # all childs processed & no error 
+      step_7_progression_dt[p_idx, `:=`(
+        processed         = TRUE,
+        processing_status = "all_child_links_processed",
+        subsitemap_status = "fully_processed",
+        subsitemap_progress = paste0(n_kids, " of ", n_kids)
+      )]
+    } else if (n_kids > 0 && all(stats %in% c(status_ok, status_err))) {
+      # all childs processed & at least one error 
+      step_7_progression_dt[p_idx, `:=`(
+        processed         = FALSE,
+        processing_status = "all_processed_some_errors",
+        subsitemap_status = "partially_failed",
+        subsitemap_progress = paste0(processed_count, " of ", n_kids)
+      )]
+    } else {
+      # at one child is in_progress 
+      step_7_progression_dt[p_idx, `:=`(
+        processed         = FALSE,
+        processing_status = "in_progress",
+        subsitemap_status = "in_progress",
+        subsitemap_progress = paste0(processed_count, " of ", n_kids)
+      )]
+    }
+  }
+
+  ## Override if roottag "urlset" + in valid group
+  .grp_id <- pagination_group
+  err_vec <- c("response_error", "xml_error", "unsupported_root_tag")
+  if (rt == "urlset" && !is.na(pagination_group)) {
+  
+    # pull all rows of this group
+    grp_rows <- step_7_progression_dt[pagination_group == .grp_id][order(pagination_index)]
+    if (!is.na(pagination_group_status) && pagination_group_status == "valid_up") {
+    grp_rows <- grp_rows[order(-pagination_index)]
+    
+    } else {
+      grp_rows <- grp_rows[order(pagination_index)]
+    }
+  
+    # check if three in a row lay before the date range 
+    status_vec <- grp_rows$pagination_group_status
+    runs       <- rle(status_vec)                       # Run-Length-Encoding
+    abort_now  <- any(runs$values == "date_before_range" & runs$lengths >= 3)
+    
+    if (abort_now) {
+      abort_idx <- which(step_7_progression_dt$pagination_group == pagination_group &
+                         !step_7_progression_dt$processed &
+                         !step_7_progression_dt$processing_status %in% err_vec)
+    
+      if (length(abort_idx) > 0) {
+        step_7_progression_dt[abort_idx, `:=`(
+          processed               = TRUE,
+          processing_status       = "excluded_by_date",
+          pagination_group_status = "aborted"
+        )]
+      }
+    }
+  }
+  
+  # dissolve any valid_up / valid_down group that contains a SitemapIndex
+
+  valid_grps <- unique(
+    step_7_progression_dt[pagination_group_status %in% c("valid_up", "valid_down")]$pagination_group
+  )
+  
+  for (g in valid_grps) {
+    rows_g <- step_7_progression_dt[pagination_group == g]
+    if (any(rows_g$root_tag == "sitemapindex")) {
+  
+      diss_idx <- which(step_7_progression_dt$pagination_group == g &
+                        !step_7_progression_dt$processing_status %in% err_vec)
+  
+      if (length(diss_idx) > 0) {
+        step_7_progression_dt[diss_idx, `:=`(
+          processed               = FALSE,
+          processing_status       = "in_progress",
+          pagination_group_status = "dissolved",
+          pagination_group        = NA_character_,
+          pagination_index        = NA_integer_
+        )]
+      }
+    }
+  }
+  
+  assign(step_7_progression_dt_name, step_7_progression_dt, envir = .GlobalEnv)
+}
+
+# Function: step_7_2_master_dt_update_func
+# This function updates or inserts entries into the global_master_dt table.
+# Status assignment logic is extended to cover new blocked/retry-related categories.
+
+step_7_2_master_dt_update_func <- function(
+  domain_id,
+  domain_url,
+  l1_id, 
+  layer_1_url,
+  request_increment = 0L,
+  current_user_agent_id = NA_integer_
+) {
+  # Load related tables
+  prog_name   <- paste0("sitemap_id_", l1_id, "_progression_dt")
+  log_name    <- paste0("sitemap_id_", l1_id, "_response_log_dt")
+  output_name <- paste0("sitemap_id_", l1_id, "_output_dt")
+  
+  progression_dt <- if (exists(prog_name, envir = .GlobalEnv))
+    get(prog_name, envir = .GlobalEnv) else data.table()
+  response_log_dt <- if (exists(log_name, envir = .GlobalEnv))
+    get(log_name, envir = .GlobalEnv) else data.table()
+  output_dt <- if (exists(output_name, envir = .GlobalEnv))
+    get(output_name, envir = .GlobalEnv) else data.table()
+
+  # Determine input_processing_status based on progression statuses
+  status_vals <- unique(na.omit(progression_dt$processing_status))
+  only_final <- all(status_vals %in% c("excluded_by_string", "excluded_by_date", "scraped", "all_child_links_processed", 
+                                       "response_error", "xml_error", "parse_error", "unsupported_root_tag" ,"all_processed_some_errors"))
+  only_error <- all(status_vals %in% c("response_error", "xml_error", "parse_error", "unsupported_root_tag"))
+  has_final  <- any(status_vals %in% c("excluded_by_string", "excluded_by_date", "scraped", "all_child_links_processed"))
+  has_active <- any(status_vals %in% c("in_progress", "subsitemap_sorted"))
+
+  if (has_active) {
+    input_status <- "in_progress"
+  } else if (only_final) {
+    input_status <- "fully_processed"
+  } else if (only_error && !has_final) {
+    input_status <- "total_error"
+  } else {
+    input_status <- "in_progress"
+  }
+
+  # Determine processing_flag from last action in response log
+  if (nrow(response_log_dt) > 0) {
+    actions <- na.omit(response_log_dt$action_taken)
+    last_action <- if (length(actions) > 0) actions[length(actions)] else NA_character_
+    processing_flag <- switch(
+      last_action,
+      logged              = "normal",
+      soft_block_handling = "softblock",
+      hard_block          = "retry",
+      "normal"
+    )
+  } else {
+    processing_flag <- "normal"
+  }
+
+  # Compute totals
+  slice <- global_master_dt[layer_1_url_id == l1_id, total_request_count]
+
+  total_requests_prior <- if (length(slice) == 0) 0L else slice[1]
+  total_requests_new   <- total_requests_prior + as.integer(request_increment)
+  total_urlsets        <- nrow(output_dt)
+
+  # Update or insert master_dt row
+  if (l1_id %in% global_master_dt$layer_1_url_id) {
+    global_master_dt[layer_1_url_id == l1_id, `:=`(
+        input_processing_status = input_status,
+        total_request_count     = total_requests_new,
+        total_urslets_scraped   = total_urlsets,
+        last_checked            = Sys.time(),
+        current_user_agent_id   = current_user_agent_id,
+        processing_flag         = processing_flag
+      )]
+  } else {
+    global_master_dt <<- rbind(
+      global_master_dt,
+      data.table(
+        domain_id               = domain_id,
+        layer_1_url_id          = l1_id,
+        layer_1_url             = layer_1_url,
+        input_processing_status = input_status,
+        total_request_count     = total_requests_new,
+        total_urslets_scraped   = total_urlsets,
+        last_checked            = Sys.time(),
+        current_user_agent_id   = current_user_agent_id,
+        processing_flag         = processing_flag
+      ),
+      fill = TRUE
+    )
+  }
+  
+  # Checking fully processed inputs for retry flags and labeling for retry if neccessary.
+  fully_processed_rows <- global_master_dt[input_processing_status == "fully_processed"]
+
+  for (i in seq_len(nrow(fully_processed_rows))) {
+    l1_id_check <- fully_processed_rows$layer_1_url_id[i]
+    log_name_check <- paste0("sitemap_id_", l1_id_check, "_response_log_dt")
+
+    if (exists(log_name_check, envir = .GlobalEnv)) {
+      log_dt_check <- get(log_name_check, envir = .GlobalEnv)
+      if ("retry_flag" %in% names(log_dt_check) && any(log_dt_check$retry_flag == TRUE, na.rm = TRUE)) {
+        global_master_dt[layer_1_url_id == l1_id_check, input_processing_status := "partially_processed_and_moved_to_retry"]
+      }
+    }
+  }
+  
+}
+
+# Function: step_7_3_response_log_update_func
+# This function logs all non-200 HTTP responses and updates category counters and flags.
+# After logging, it updates the associated progression entry and resets counters if needed.
+
+step_7_3_response_log_update_func <- function(
+  domain_id,
+  domain_url,
+  layer_1_url_id,
+  layer_1_url,
+  requested_url_id,
+  requested_url,
+  client_profile_id,
+  http_response
+) {
+  # Construct the name of the response-log data.table for this sitemap
+  resp_log_name <- paste0("sitemap_id_", layer_1_url_id, "_response_log_dt")
+
+  # If the response-log table does not exist yet, create it with the required columns
+  if (!exists(resp_log_name, envir = .GlobalEnv)) {
+    assign(resp_log_name, data.table(
+      domain_id                  = integer(),
+      domain_url                 = character(),
+      layer_1_url_id             = integer(),
+      layer_1_url                = character(),
+      requested_url_id           = integer(),
+      requested_url              = character(),
+      client_profile_id          = integer(),
+      timestamp                  = as.POSIXct(character()),
+      http_status_code           = integer(),
+      http_status_message        = character(),
+      response_header_snippet    = character(),
+      response_body_snippet      = character(),
+      response_category          = character(),
+      soft_block_count_at_time   = integer(),
+      hard_block_count_at_time   = integer(),
+      other_error_count_at_time  = integer(),
+      action_taken               = character(),
+      retry_flag                 = logical()
+    ), envir = .GlobalEnv)
+  }
+
+  # Load the existing response-log table
+  resp_log_dt <- get(resp_log_name, envir = .GlobalEnv)
+
+  # Initialize local variables for logging
+  if (is.null(http_response)) {
+    # No response object → treat as hard block
+    status_code     <- NA_integer_
+    status_message  <- "NULL_response"
+    header_snip     <- "NULL"
+    body_snip       <- "NULL"
+    category        <- "hard_block_indication"
+  } else {
+    # Extract HTTP status code
+    status_code    <- httr::status_code(http_response)
+
+    # Safely obtain a human-readable status message
+    status_info    <- httr::http_status(http_response)
+    status_message <- status_info$reason
+
+    # Capture first 2000 characters of headers and body
+    header_snip <- paste0(
+      capture.output(str(httr::headers(http_response))),
+      collapse = "\n"
+    )
+    header_snip <- substr(header_snip, 1, 2000)
+
+    body_snip <- tryCatch(
+      rawToChar(httr::content(http_response, as = "raw")),
+      error = function(e) "ERROR_READING_BODY"
+    )
+    body_snip <- substr(body_snip, 1, 2000)
+
+    # Classify response category
+    if (is.na(status_code) || status_code %in% c(401, 403, 407)) {
+      category <- "hard_block_indication"
+    } else if (status_code %in% c(406, 408, 429, 503)) {
+      category <- "soft_block_indication"
+    } else {
+      category <- "other_error"
+    }
+  }
+
+  retry_flag_value <- if (category == "other_error") FALSE else TRUE
+  
+  # Retrieve previous counters from the last log entry
+  prev_soft  <- 0L
+  prev_hard  <- 0L
+  prev_other <- 0L
+  if (nrow(resp_log_dt) > 0) {
+    last_cat <- tail(na.omit(resp_log_dt$response_category), 1)
+    if (length(last_cat) == 1) {
+      if (last_cat == "soft_block_indication") {
+        prev_soft <- tail(resp_log_dt$soft_block_count_at_time, 1)
+      } else if (last_cat == "hard_block_indication") {
+        prev_hard <- tail(resp_log_dt$hard_block_count_at_time, 1)
+      } else if (last_cat == "other_error") {
+        prev_other <- tail(resp_log_dt$other_error_count_at_time, 1)
+      }
+    }
+  }
+
+  # Increment or reset counters based on current category
+  soft_count  <- if (category == "soft_block_indication") prev_soft + 1L else 0L
+  hard_count  <- if (category == "hard_block_indication") prev_hard + 1L else 0L
+  other_count <- if (category == "other_error") prev_other + 1L else 0L
+
+  # Decide action based on thresholds
+  action <- "logged"
+  if (soft_count > 10L) {
+    action <- "soft_block_handling"
+  } else if (hard_count > 10L || other_count > 10L) {
+    action <- "hard_block"
+  }
+
+  # Build a new log entry
+  new_entry <- data.table(
+    Domain_id                  = domain_id,
+    Domain_url                 = domain_url,
+    Layer_1_url_id             = layer_1_url_id,
+    Layer_1_url                = layer_1_url,
+    requested_url_id           = requested_url_id,
+    requested_url              = requested_url,
+    client_profile_id          = client_profile_id,
+    timestamp                  = Sys.time(),
+    http_status_code           = status_code,
+    http_status_message        = status_message,
+    response_header_snippet    = header_snip,
+    response_body_snippet      = body_snip,
+    response_category          = category,
+    soft_block_count_at_time   = soft_count,
+    hard_block_count_at_time   = hard_count,
+    other_error_count_at_time  = other_count,
+    action_taken               = action,
+    retry_flag                 = retry_flag_value
+  )
+
+  # Append the new entry and save back to the global environment
+  resp_log_dt <- rbind(resp_log_dt, new_entry, fill = TRUE)
+  assign(resp_log_name, resp_log_dt, envir = .GlobalEnv)
+
+  # Update the progression table for this failed URL
+  prog_name <- paste0("sitemap_id_", layer_1_url_id, "_progression_dt")
+  if (exists(prog_name, envir = .GlobalEnv)) {
+    dt  <- get(prog_name, envir = .GlobalEnv)
+    idx <- which(dt$current_url_id == requested_url_id)
+    if (length(idx) > 0) {
+      data.table::set(dt, i = idx, j = "processed",         value = FALSE)
+      data.table::set(dt, i = idx, j = "processing_status", value = "response_error")
+    }
+    assign(prog_name, dt, envir = .GlobalEnv)
+  }
+}
+
+# Function: step_7_4_urlset_scraper_func
+# parses the XML, checks lastmod tags, and stores valid URLSETs in the output data table.
+# Ensures uniqueness of urlset entries and ids.
+# Updated step_7_4_urlset_scraper_func with pagination-group date_before_range logic,
+# preserving existing progression values except for group-status override.
+step_7_4_urlset_scraper_func <- function(
+  url,
+  http_response,
+  xml_doc = NULL,
+  global_date_start,
+  global_date_end,
+  domain_id,
+  domain_url,
+  layer_1_url_id,
+  layer_1_url,
+  current_url_id,
+  parent_url_id
+) {
+  # Parse XML from response or provided doc
+  if (!is.null(xml_doc)) {
+    doc <- xml_doc
+  } else {
+    doc <- NULL
+    if (grepl("\\.gz$", url, ignore.case = TRUE)) {
+      raw <- tryCatch(httr::content(http_response, as = "raw"), error = function(e) NULL)
+      if (!is.null(raw)) {
+        con <- tryCatch(gzcon(rawConnection(raw, "rb")), error = function(e) NULL)
+        if (!is.null(con)) {
+          doc <- tryCatch(xml2::read_xml(con), error = function(e) NULL)
+          close(con)
+        }
+      }
+    } else {
+      txt <- tryCatch(httr::content(http_response, as = "text", encoding = "UTF-8"), error = function(e) NULL)
+      if (!is.null(txt)) {
+        doc <- tryCatch(xml2::read_xml(txt), error = function(e) NULL)
+      }
+    }
+  }
+
+  # If parsing failed, log error and update progression
+  if (is.null(doc)) {
+    global_error_dt <<- rbind(
+      global_error_dt,
+      data.table(
+        domain_id = domain_id, domain_url = domain_url,
+        layer_1_url_id = layer_1_url_id, layer_1_url = layer_1_url,
+        error_url_id = current_url_id, error_url = url,
+        parent_url_id = parent_url_id, root_tag = "urlset",
+        error_category = "xml_parse_error",
+        processed_flag = FALSE, retry_flag = TRUE,
+        timestamp = Sys.time(), source_function = "step_7_4_urlset_scraper_func",
+        status_code = httr::status_code(http_response)
+      ), fill = TRUE
+    )
+    step_7_1_progression_update(
+      domain_id = domain_id, domain_url = domain_url,
+      layer_1_url_id = layer_1_url_id, layer_1_url = layer_1_url,
+      current_url = url, parent_url_id = parent_url_id,
+      processed = FALSE, processing_status = "xml_error",
+      in_range = "unknown", root_tag = "urlset"
+    )
+    return(NULL)
+  }
+
+  # Ensure root tag is <urlset>
+  if (tolower(xml2::xml_name(xml2::xml_root(doc))) != "urlset") {
+    return(NULL)
+  }
+
+  # Normalize namespace
+  ns_map <- xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns")
+
+  # run date check 
+  step_7_4_date_res <- step_5_1_date_check_urlset_func(
+    xml_doc   = doc,
+    ns_map    = ns_map,
+    date_from = global_date_start,
+    date_to   = global_date_end
+  )
+  # Extract all <lastmod> dates
+  locs  <- xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map)
+  lastmods <- xml2::xml_find_all(doc, ".//ns:lastmod", ns = ns_map) |> xml2::xml_text()
+  dates <- as.Date(gsub("T.*","", lastmods), "%Y-%m-%d")
+  dates <- dates[!is.na(dates)]
+
+  # fetch old progression values once
+  prog_name <- paste0("sitemap_id_", layer_1_url_id, "_progression_dt")
+  prog_dt   <- get(prog_name, envir = .GlobalEnv)
+  old_row <- prog_dt[current_url == url][1] 
+  
+  # pagination‐group date_before_range check
+  if (!is.na(old_row$pagination_group) && length(dates) > 0) {
+
+  url_from  <- min(dates)
+  url_to    <- max(dates)
+
+   
+    if (url_to < global_date_start) {
+      step_7_1_progression_update(
+        domain_id               = domain_id,
+        domain_url              = domain_url,
+        layer_1_url_id          = layer_1_url_id,
+        layer_1_url             = layer_1_url,
+        current_url             = url,
+        parent_url_id           = parent_url_id,
+        processed               = TRUE,                 
+        processing_status       = "excluded_by_date",  
+        in_range                = "no",
+        root_tag                = "urlset",
+        subsitemap_status       = "not_a_sitemap",
+        sort_order              = list(data.table()),
+        subsitemap_progress     = "not_a_sitemap",
+        pagination_group        = old_row$pagination_group,
+        pagination_index        = old_row$pagination_index,
+        pagination_group_status = "date_before_range"
+      )
+      return(NULL)
+    }
+  }
+
+  # Call original date-check for output
+  date_info <- step_5_1_date_check_urlset_func(doc, ns_map, global_date_start, global_date_end)
+  link_count <- length(xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map))
+  date_range <- NA_character_
+  if (date_info$reason == "in_range") {
+    rd <- dates[dates >= global_date_start & dates <= global_date_end]
+    if (length(rd) > 0) {
+      date_range <- paste0(format(min(rd), "%Y-%m-%d"), " - ", format(max(rd), "%Y-%m-%d"))
+    }
+  }
+
+  # Write to output table if proceed
+  if (date_info$decision == "proceed") {
+    out_name <- paste0("sitemap_id_", layer_1_url_id, "_output_dt")
+    if (!exists(out_name, envir = .GlobalEnv)) {
+      assign(out_name, data.table(
+        domain_id = integer(), domain_url = character(),
+        layer_1_url_id = integer(), layer_1_url = character(),
+        urlset_id = integer(), urlset_url = character(),
+        in_range = character(), urlset_link_count = integer(),
+        urlset_date_range = character(), urlset_content = character()
+      ), envir = .GlobalEnv)
+    }
+    out_dt <- get(out_name, envir = .GlobalEnv)
+    new_id <- if (nrow(out_dt)==0) 1L else max(out_dt$urlset_id)+1L
+    out_dt <- rbind(out_dt, data.table(
+      domain_id = domain_id, domain_url = domain_url,
+      layer_1_url_id = layer_1_url_id, layer_1_url = layer_1_url,
+      urlset_id = new_id, urlset_url = url,
+      in_range = date_info$reason,
+      urlset_link_count = link_count,
+      urlset_date_range = date_range,
+      urlset_content = as.character(doc)
+    ), fill=TRUE)
+    assign(out_name, out_dt, envir = .GlobalEnv)
+  }
+
+  # Final progression update preserving original pagination_group/index
+  step_7_1_progression_update(
+    domain_id           = domain_id,
+    domain_url          = domain_url,
+    layer_1_url_id      = layer_1_url_id,
+    layer_1_url         = layer_1_url,
+    current_url         = url,
+    parent_url_id       = parent_url_id,
+    processed           = TRUE,
+    processing_status   = switch(
+      step_7_4_date_res$reason,
+      in_range         = "scraped",
+      no_lastmod_found = "scraped",
+      "excluded_by_date"
+    ),
+    in_range            = step_7_4_date_res$reason,
+    root_tag            = "urlset",
+    subsitemap_status   = "not_a_sitemap",
+    sort_order          = list(data.table()),
+    subsitemap_progress = "not_a_sitemap",
+    pagination_group    = old_row$pagination_group,
+    pagination_index    = old_row$pagination_index
+  )
+  
+  # return summary
+  list(
+    in_range  = (step_7_4_date_res$decision=="proceed" && step_7_4_date_res$reason=="in_range"),
+    reason    = step_7_4_date_res$reason,
+    link_cnt  = length(locs),
+    date_span = if (length(dates)>0) paste0(min(dates)," - ",max(dates)) else NA_character_
+  )
+}
+
+
+
+cat("Step 7 completed: Progression_dt updater function, response_dt updater function, master_dt updater function, urlset scraper function initialized.\n")
+
+```
+
+```{r Step 8: Main recursive sitemap processing function with logging}
+
+# Actual recursive function 
+step_8_recursive_processing_func <- function(next_input) {
+  # get master‑row + basics
+  master_row  <- global_master_dt[next_input]
+  did         <- master_row$domain_id
+  dur         <- master_row$domain_url
+  lid         <- master_row$layer_1_url_id
+  lurl        <- master_row$layer_1_url
+  flag        <- master_row$processing_flag
+  cur_ua_id   <- master_row$current_user_agent_id
+  cur_ua_id <- global_master_dt$`current_user_agent_id`[next_input]
+  if (is.na(cur_ua_id) || cur_ua_id == 0 || is.null(cur_ua_id)) {
+    cur_ua_id <- 2L  
+  } else {
+    cur_ua_id <- (cur_ua_id %% length(global_user_agent_list)) + 1L
+  }
+  ua_string   <- global_user_agent_list[cur_ua_id]
+  global_master_dt[next_input, current_user_agent_id := cur_ua_id]
+
+  max_req     <- ifelse(flag == "softblock", 15L, 20L)
+  sleep_delay <- ifelse(flag == "softblock", 3, 0)
+
+  # local tables
+  prog_name <- paste0("sitemap_id_", lid, "_progression_dt")
+  out_name  <- paste0("sitemap_id_", lid, "_output_dt")
+  log_name  <- paste0("sitemap_id_", lid, "_response_log_dt")
+  prog_dt   <- get(prog_name, envir = .GlobalEnv)
+  out_dt    <- get(out_name,  envir = .GlobalEnv)
+  log_dt    <- get(log_name,  envir = .GlobalEnv)
+  prog_root <- prog_dt[current_url_id == 1L]
+
+  # initialize counters
+  internal_request_counter <- 0L
+  internal_error_counter   <- 0L
+
+  ## Helper to refresh all controll structures 
+  step_8_1_finish_func <- function() {
+  # recalc progression (forces progress string etc.)
+  if (exists(prog_name, envir = .GlobalEnv)) {
+    dt  <- get(prog_name, envir = .GlobalEnv)
+    root_idx <- which(dt$current_url == lurl & dt$parent_url_id == 0L)
+    if (length(root_idx) > 0) {
+      # get existing vlaues 
+      proc_val   <- dt$processed[root_idx][1]
+      status_val <- dt$processing_status[root_idx][1]
+      in_range_val <- dt$in_range[root_idx][1]
+      
+      # Progression update 
+      step_7_1_progression_update(
+        domain_id         = did,
+        domain_url        = dur,
+        layer_1_url_id    = lid,
+        layer_1_url       = lurl,
+        current_url       = lurl,
+        parent_url_id     = 0L,
+        processed         = proc_val,
+        processing_status = status_val, 
+        in_range          = in_range_val 
+      )
+    }
+  }
+
+  # Master-Update
+  step_7_2_master_dt_update_func(
+    domain_id             = did,
+    domain_url            = dur,
+    l1_id                 = lid,
+    layer_1_url           = lurl,
+    request_increment     = internal_request_counter,
+    current_user_agent_id = cur_ua_id
+  )
+
+  # Summary Print
+  out_dt <- get(out_name, envir = .GlobalEnv)
+  total_processed <- sum(prog_dt$processed, na.rm = TRUE)
+  total_errors    <- sum(prog_dt$processing_status %in%
+                       c("response_error", "xml_error", "unsupported_root_tag"), na.rm = TRUE)
+
+  cat(sprintf("Requests sent to %s in this iteration: %d.\n", lurl, internal_request_counter))
+  cat(sprintf("Total requests: %d.\n", global_master_dt[layer_1_url_id == lid]$total_request_count))
+  cat(sprintf("Total urlsets scraped: %d.\n", nrow(out_dt)))
+  cat(sprintf("Total progression entries: %d.\n", nrow(prog_dt)))
+  cat(sprintf("Total links processed: %d.\n", total_processed))
+  cat(sprintf("Total errors: %d.\n", total_errors))
+  cat(sprintf("State of input sitemap: %s.\n", global_master_dt[layer_1_url_id == lid]$processing_flag))
+  }
+
+  ## Helper to validate groups in line 
+  step_8_2_validate_pagination_group <- function(layer_1_url_id, group_id, global_date_start, global_date_end) {
+  prog_name <- paste0("sitemap_id_", layer_1_url_id, "_progression_dt")
+  prog_dt <- get(prog_name, envir = .GlobalEnv)
+
+  # Identify rows belonging to this pagination group
+  group_rows <- prog_dt[pagination_group == group_id]
+
+  # Sample three URLs: first, middle, last
+  sample_idx <- c(1, ceiling(nrow(group_rows) / 2), nrow(group_rows))
+  detected_dates <- c()
+  sample_tags <- c()
+  for (i in sample_idx) {
+    test_url <- group_rows$current_url[i]
+    resp <- tryCatch(
+      httr::GET(test_url, httr::user_agent(global_user_agent_list[2]), httr::timeout(30)),
+      error = function(e) NULL
+    )
+    if (!is.null(resp) && httr::status_code(resp) == 200L) {
+      xml_doc <- tryCatch(
+        xml2::read_xml(httr::content(resp, as = "text", encoding = "UTF-8")),
+        error = function(e) NULL
+      )
+      root_tag <- tolower(xml2::xml_name(xml2::xml_root(xml_doc)))
+      sample_tags <- c(sample_tags, root_tag)
+      if (root_tag == "urlset") {
+        ns_map <- xml2::xml_ns_rename(xml2::xml_ns(xml_doc), d1 = "ns")
+        date_res <- step_5_1_date_check_urlset_func(
+          xml_doc   = xml_doc,
+          ns_map    = ns_map,
+          date_from = global_date_start,
+          date_to   = global_date_end
+        )
+        
+        if (root_tag == "urlset") {
+        ns_map <- xml2::xml_ns_rename(xml2::xml_ns(xml_doc), d1 = "ns")
+        lastmods <- xml2::xml_find_all(xml_doc, ".//ns:lastmod", ns = ns_map) |> xml2::xml_text()
+        dates <- as.Date(gsub("T.*", "", lastmods), format = "%Y-%m-%d")
+        dates <- dates[!is.na(dates)]
+        
+        if (length(dates) > 0) {
+          detected_dates <- c(detected_dates, min(dates))  
+        
+        } else {
+          cat(sprintf("%s No valid last mod tags found in sample request.\n", test_url))
+        }
+      }
+      }
+    }
+  }
+
+  # If any sample is not a urlset, dissolve group
+  if (!(length(sample_tags) == 3 && all(sample_tags == "urlset"))) {
+    for (url in group_rows$current_url) {
+      step_7_1_progression_update(
+        domain_id                = group_rows$domain_id[1],
+        domain_url               = group_rows$domain_url[1],
+        layer_1_url_id           = layer_1_url_id,
+        layer_1_url              = group_rows$layer_1_url[1],
+        current_url              = url,
+        parent_url_id            = group_rows$parent_url_id[1],
+        pagination_group         = NA_character_,
+        pagination_index         = NA_integer_,
+        pagination_group_status  = "invalid_urlsets"
+      )
+    }
+    return(FALSE)
+  }
+
+  # Check if dates are monotonic within 2-day tolerance
+  is_up   <- all(detected_dates[-1] >= detected_dates[-length(detected_dates)] - 2)
+  is_down <- all(detected_dates[-1] <= detected_dates[-length(detected_dates)] + 2)
+  status_to_set <- if (is_up) "valid_up" else if (is_down) "valid_down" else "invalid"
+
+  # Apply status updates for entire group
+  for (url in group_rows$current_url) {
+    if (status_to_set == "invalid") {
+      step_7_1_progression_update(
+        domain_id               = group_rows$domain_id[1],
+        domain_url              = group_rows$domain_url[1],
+        layer_1_url_id          = layer_1_url_id,
+        layer_1_url             = group_rows$layer_1_url[1],
+        current_url             = url,
+        parent_url_id           = group_rows$parent_url_id[1],
+        pagination_group_status = "invalid",
+        pagination_group        = NA_character_,
+        pagination_index        = NA_integer_
+      )
+    } else {
+      step_7_1_progression_update(
+        domain_id               = group_rows$domain_id[1],
+        domain_url              = group_rows$domain_url[1],
+        layer_1_url_id          = layer_1_url_id,
+        layer_1_url             = group_rows$layer_1_url[1],
+        current_url             = url,
+        parent_url_id           = group_rows$parent_url_id[1],
+        pagination_group_status = status_to_set
+      )
+    }
+  }
+  return(status_to_set %in% c("valid_up", "valid_down"))
+}
+
+  # recursion 
+  repeat {
+     
+    # abort check
+    if (internal_request_counter >= max_req || internal_error_counter >= 5L) {
+      step_8_1_finish_func(); break
+    }
+    
+    # check for "candidate" groups 
+    candidate_groups <- unique(prog_dt[pagination_group_status == "candidate"]$pagination_group)
+    for (g in candidate_groups) {
+      step_8_2_validate_pagination_group(layer_1_url_id = lid,
+                                 group_id = g,
+                                 global_date_start = global_date_start,
+                                 global_date_end = global_date_end)
+      internal_request_counter <- internal_request_counter + 3L
+    }
+    
+    # reload progression each loop
+    prog_dt <- get(prog_name, envir = .GlobalEnv)
+    if (!"pagination_group_status" %in% colnames(prog_dt)) {
+      prog_dt[, pagination_group_status := NA_character_]
+      assign(prog_name, prog_dt, envir = .GlobalEnv)
+    }
+    
+    # filter out errors 
+    valid_dt <- prog_dt[
+      !processing_status %in% c("xml_error", "response_error", "unsupported_root_tag") &
+      processed == FALSE &
+      (is.na(root_tag) | root_tag == "unknown")
+    ]
+    
+    # first: no pagination
+    group_a <- valid_dt[is.na(pagination_group) & is.na(pagination_index)]
+    if (nrow(group_a) > 0) {
+      next_row <- group_a[order(parent_url_id, sort_place, current_url_id)][1]
+    } else {
+      # then: paginated
+      group_b <- valid_dt[!is.na(pagination_group) & !is.na(pagination_index)]
+      if (nrow(group_b) > 0) {
+        next_row <- group_b[
+          order(parent_url_id, pagination_group, pagination_index, current_url_id)
+        ][1]
+      } else {
+        next_row <- NULL
+      }
+    }
+    
+    # break if all done 
+    if (is.null(next_row) || nrow(next_row) == 0) {
+      step_8_1_finish_func()
+      break
+    }
+    
+    # GET request
+    resp <- tryCatch(
+      httr::GET(next_row$current_url,
+                httr::user_agent(ua_string),
+                httr::timeout(30)),
+      error = function(e) NULL
+    )
+    internal_request_counter <- internal_request_counter + 1L
+
+    Sys.sleep(sleep_delay)
+
+    # response handling 
+    if (!is.null(resp) && httr::status_code(resp) == 200L) {
+      # reset block counters in response_log
+      if (exists(log_name, envir = .GlobalEnv)) {
+        tmp_log <- get(log_name, envir = .GlobalEnv)
+        tmp_log[, c(
+          "soft_block_count_at_time",
+          "hard_block_count_at_time",
+          "other_error_count_at_time"
+        ) := .(0L, 0L, 0L)]
+        assign(log_name, tmp_log, envir = .GlobalEnv)
+      }
+      internal_error_counter <- 0L
+    } else {
+      # non‑200
+      step_7_3_response_log_update_func(
+        domain_id         = did,
+        domain_url        = dur,
+        layer_1_url_id    = lid,
+        layer_1_url       = lurl,
+        requested_url_id  = next_row$current_url_id,
+        requested_url     = next_row$current_url,
+        client_profile_id = cur_ua_id,
+        http_response     = resp
+      )
+      # progression flag
+      step_7_1_progression_update(
+        domain_id         = did, domain_url = dur,
+        layer_1_url_id    = lid, layer_1_url = lurl,
+        current_url       = next_row$current_url,
+        parent_url_id     = next_row$parent_url_id,
+        processed         = FALSE,
+        processing_status = "response_error"
+      )
+      internal_error_counter <- internal_error_counter + 1L
+      cat(sprintf(
+        "Error response for link: %s. \n Status code %s. \n Entry in response_log made.\n",
+        next_row$current_url,
+        ifelse(is.null(resp), "NULL", httr::status_code(resp))
+      ))
+      next
+    }
+  
+    # gz handling
+    xml_doc <- NULL
+    
+    if (grepl("\\.gz$", next_row$current_url, ignore.case = TRUE)) {
+      # 1) raw data as vector
+      raw_data <- tryCatch(httr::content(resp, as = "raw"),
+                           error = function(e) NULL)
+      if (!is.null(raw_data)) {
+        # 2) unapck binary
+        con_gz <- tryCatch(gzcon(rawConnection(raw_data, "rb")),
+                           error = function(e) NULL)
+        if (!is.null(con_gz)) {
+          # 3) parse connection
+          xml_doc <- tryCatch(xml2::read_xml(con_gz),
+                              error = function(e) NULL)
+          close(con_gz)
+        }
+      }
+    } else {
+      # normal xml
+      xml_text <- tryCatch(httr::content(resp, as = "text", encoding = "UTF-8"),
+                           error = function(e) NULL)
+      if (!is.null(xml_text)) {
+        xml_doc <- tryCatch(xml2::read_xml(xml_text),
+                            error = function(e) NULL)
+      }
+    }
+    
+    if (is.null(xml_doc)) {
+      # parse error
+      global_error_dt <<- rbind(
+        global_error_dt,
+        data.table::data.table(
+          domain_id = did, domain_url = dur,
+          layer_1_url_id = lid, layer_1_url = lurl,
+          error_url_id = next_row$current_url_id,
+          error_url = next_row$current_url,
+          parent_url_id = next_row$parent_url_id,
+          root_tag = NA_character_,
+          error_category = "xml_parse_error",
+          processed_flag = FALSE,
+          retry_flag = TRUE,
+          timestamp = Sys.time(),
+          source_function = "step_8_recursive_processing_func",
+          status_code = httr::status_code(resp)
+        ),
+        fill = TRUE
+      )
+      step_7_1_progression_update(
+        domain_id = did, domain_url = dur,
+        layer_1_url_id = lid, layer_1_url = lurl,
+        current_url = next_row$current_url,
+        parent_url_id = next_row$parent_url_id,
+        processed = FALSE,
+        processing_status = "xml_error"
+      )
+      cat(sprintf(
+        "Error in link %s. Link moved to error_dt, reason: parse_error.\n",
+        next_row$current_url
+      ))
+      next
+    }
+
+    # root tag routing
+    rtag <- tolower(xml2::xml_name(xml2::xml_root(xml_doc)))
+    if (!rtag %in% c("urlset", "sitemapindex", "sitemap")) {
+      global_error_dt <<- rbind(
+        global_error_dt,
+        data.table::data.table(
+          domain_id = did, domain_url = dur,
+          layer_1_url_id = lid, layer_1_url = lurl,
+          error_url_id = next_row$current_url_id,
+          error_url = next_row$current_url,
+          parent_url_id = next_row$parent_url_id,
+          root_tag = rtag,
+          error_category = "unsupported_root_tag",
+          processed_flag = FALSE,
+          retry_flag = TRUE,
+          timestamp = Sys.time(),
+          source_function = "step_8_recursive_processing_func",
+          status_code = httr::status_code(resp)
+        ),
+        fill = TRUE
+      )
+      step_7_1_progression_update(
+        domain_id = did, domain_url = dur,
+        layer_1_url_id = lid, layer_1_url = lurl,
+        current_url = next_row$current_url,
+        parent_url_id = next_row$parent_url_id,
+        processed = FALSE,
+        processing_status = "unsupported_root_tag"
+      )
+      cat(sprintf(
+        "Error in link %s. Link moved to error_dt, reason: unsupported_root_tag.\n",
+        next_row$current_url
+      ))
+      next
+    }
+
+    if (rtag == "urlset") {
+    # call urlset scraping function 
+    step_7_4_res <- step_7_4_urlset_scraper_func(
+      url               = next_row$current_url,
+      http_response     = resp,
+      xml_doc           = xml_doc,
+      global_date_start = global_date_start,
+      global_date_end   = global_date_end,
+      domain_id         = did,
+      domain_url        = dur,
+      layer_1_url_id    = lid,
+      layer_1_url       = lurl,
+      current_url_id    = next_row$current_url_id,
+      parent_url_id     = next_row$parent_url_id
+    )
+  
+    } else if (rtag == "sitemapindex") {
+      # collect child links
+      ns_map <- xml2::xml_ns_rename(xml2::xml_ns(xml_doc), d1 = "ns")
+      child_links <- xml2::xml_find_all(xml_doc, ".//ns:loc",
+                                        ns = ns_map) %>% xml2::xml_text()
+
+      sort_dt <- step_6_sorting_func(
+        step_6_links_vector       = child_links,
+        layer_1_url_id            = lid,
+        layer_1_url               = lurl,  
+        parent_url                = next_row$current_url,
+        parent_url_id             = next_row$current_url_id,
+        global_date_start         = global_date_start,
+        global_date_end           = global_date_end,
+        global_excluded_strings   = global_excluded_strings,
+        domain_id                 = did,
+        domain_url                = dur
+      )
+      
+      step_7_1_progression_update(
+        domain_id         = did,      domain_url  = dur,
+        layer_1_url_id    = lid,      layer_1_url = lurl,
+        current_url       = next_row$current_url,
+        parent_url_id     = next_row$parent_url_id,
+        processed         = FALSE,
+        processing_status = "subsitemap_sorted",
+        root_tag          = "sitemapindex",
+        subsitemap_status = "in_progress"
+      )
+
+      # summary print 
+      n_total <- nrow(sort_dt)
+      n_valid <- sum(sort_dt$sorted == "yes")
+      n_ruled <- n_total - n_valid
+      
+      cat(sprintf("Sub-sitemap URL: %s \n", next_row$current_url))
+      cat(sprintf("Total links detected on subsitemap: %d \n", n_total))
+      cat(sprintf("Excluded links: %d \n", n_ruled))
+      cat(sprintf("Valid links: %d \n", n_valid))
+    }
+  }
+}
+cat("Step 8 completed: Recursive sitemap processing function defined.\n")
+
+```
+
+
+```{r Step 9: Defining the Master Loop }
+# Define a master loop that processes all pending entries until completion
+step_9_master_loop_func <- function() {
+  step_9_iter_count <- 0L
+  
+  repeat {
+    # Identify indices still in progress
+    step_9_pending_idx <- which(
+      ! global_master_dt$input_processing_status %in% 
+        c("partially_processed_and_moved_to_retry", "fully_processed", "total_error")
+    )
+    
+    # Exit loop when no pending entries remain
+    if (length(step_9_pending_idx) == 0L) break
+    
+    step_9_iter_count <- step_9_iter_count + 1L
+    
+    # Process each pending entry, catching errors to avoid aborting
+    for (step_9_idx in step_9_pending_idx) {
+      tryCatch(
+        {
+          step_8_recursive_processing_func(next_input = step_9_idx)
+        },
+        error = function(e) {
+          message(
+            "Error in iteration ", step_9_iter_count, 
+            " for index ", step_9_idx, ": ", e$message
+          )
+        }
+      )
+    }
+    
+    # Compute counts of each status
+    step_9_fully_count     <- sum(global_master_dt$input_processing_status == "fully_processed")
+    step_9_partial_count  <- sum(global_master_dt$input_processing_status == "partially_processed_and_moved_to_retry")
+    step_9_total_count    <- sum(global_master_dt$input_processing_status == "total_error")
+    step_9_progress_count <- sum(global_master_dt$input_processing_status == "in_progress")
+    
+    # Print status summary
+    message(step_9_fully_count,     " entries fully processed")
+    message(step_9_partial_count,   " entries had partial errors and were moved to retry")
+    message(step_9_total_count,     " entries had total errors")
+    message(step_9_progress_count,  " entries still being processed")
+  }
+  
+  # Final summary when loop ends
+  message("Master loop ends after ", step_9_iter_count, " iterations.")
+  message(step_9_fully_count,    " entries fully processed")
+  message(step_9_partial_count,  " entries had partial errors and were moved to retry")
+  message(step_9_total_count,    " entries had total errors")
+}
+
+cat("Step 9 completed: Master loop defined. \n")
+
+```
+
+
+```{r Step 10: Preparing the Input, initializing progression structures}
+# Step 10: Preparing the Input, initializing progression structures
+step_10_input_dt <- step_2_input_dt  
+
+# Exclude by string patterns
+step_10_string_excluded_dt <- step_10_input_dt %>%
+  filter(str_detect(layer_1_url, paste(global_excluded_strings, collapse = "|"))) %>%
+  mutate(
+    excluded_url_id = as.integer(layer_1_url_id),
+    excluded_url    = layer_1_url,
+    reason          = "excluded_by_string"
+  )
+
+# date-based filtering for remaining
+step_10_remaining_dt <- step_10_input_dt %>%
+  anti_join(step_10_string_excluded_dt, by = "layer_1_url_id") %>%
+  rowwise() %>%
+  mutate(
+    date_res    = list(step_5_2_date_check_link_func(layer_1_url, global_date_start, global_date_end)),
+    date_reason = date_res$reason
+  ) %>%
+  ungroup()
+
+step_10_date_excluded_dt <- step_10_remaining_dt %>%
+  filter(date_reason == "out_of_range") %>%
+  mutate(
+    excluded_url_id = as.integer(layer_1_url_id),
+    excluded_url    = layer_1_url,
+    reason          = "excluded_by_date"
+  )
+
+# log all exclusions into global_error_dt
+global_error_dt <- rbind(
+  global_error_dt,
+  step_10_string_excluded_dt %>%
+    transmute(
+      domain_id       = domain_id,
+      domain_url      = domain_url,
+      layer_1_url_id  = layer_1_url_id,
+      layer_1_url     = layer_1_url,
+      error_url_id    = excluded_url_id,
+      error_url       = excluded_url,
+      parent_url_id   = 0L,
+      root_tag        = "unknown",
+      error_category  = "excluded_string",
+      processed_flag  = TRUE,
+      retry_flag      = FALSE,
+      timestamp       = Sys.time(),
+      source_function = "code_chunk_10",
+      status_code     = NA_integer_
+    ),
+  step_10_date_excluded_dt %>%
+    transmute(
+      domain_id       = domain_id,
+      domain_url      = domain_url,
+      layer_1_url_id  = layer_1_url_id,
+      layer_1_url     = layer_1_url,
+      error_url_id    = excluded_url_id,
+      error_url       = excluded_url,
+      parent_url_id   = 0L,
+      root_tag        = "unknown",
+      error_category  = "input_out_of_range",
+      processed_flag  = TRUE,
+      retry_flag      = FALSE,
+      timestamp       = Sys.time(),
+      source_function = "code_chunk_10",
+      status_code     = NA_integer_
+    ),
+  fill = TRUE
+)
+
+# prepare cleaned input table
+step_10_clean_input_dt <- step_10_remaining_dt %>%
+  filter(date_reason != "out_of_range") %>%
+  select(domain_id, domain_url, layer_1_url_id, layer_1_url) %>%
+  mutate(
+    domain_id       = row_number(),
+    layer_1_url_id  = row_number()
+  )
+
+# initialize individual progression / output / response tables and master entries
+for (i in seq_len(nrow(step_10_clean_input_dt))) {
+  did <- step_10_clean_input_dt$domain_id[i]
+  dur <- step_10_clean_input_dt$domain_url[i]
+  lid <- step_10_clean_input_dt$layer_1_url_id[i]
+  url <- step_10_clean_input_dt$layer_1_url[i]
+
+  prog_name <- paste0("sitemap_id_", lid, "_progression_dt")
+  out_name  <- paste0("sitemap_id_", lid, "_output_dt")
+  log_name  <- paste0("sitemap_id_", lid, "_response_log_dt")
+
+  assign(prog_name, data.table(), envir = .GlobalEnv)
+  assign(out_name,  data.table(), envir = .GlobalEnv)
+  assign(log_name,  data.table(), envir = .GlobalEnv)
+
+  root_entry <- data.table(
+    domain_id                    = did,
+    domain_url                   = dur,
+    layer_1_url_id               = lid,
+    layer_1_url                  = url,
+    current_url_id               = 1L,
+    current_url                  = url,
+    parent_url_id                = 0L,
+    processed                    = FALSE,
+    processing_status            = "in_progress",
+    sorted                       = "no",
+    sort_place                   = NA_integer_,
+    in_range                     = NA_character_,
+    root_tag                     = "unknown",
+    subsitemap_status            = NA_character_,
+    sort_order                   = list(data.table()),
+    subsitemap_progress          = NA_character_,
+    pagination_group             = NA_character_,
+    pagination_index             = NA_integer_,
+    pagination_group_status      = NA_character_,
+    timestamp                    = Sys.time()
+  )
+  assign(prog_name,
+         rbind(get(prog_name, envir = .GlobalEnv), root_entry, fill = TRUE),
+         envir = .GlobalEnv)
+
+  global_master_dt <<- rbind(
+    global_master_dt,
+    data.table(
+      domain_id               = did,
+      domain_url              = dur,
+      layer_1_url_id          = lid,
+      layer_1_url             = url,
+      input_processing_status = "in_progress",
+      total_request_count     = 0L,
+      total_urslets_scraped   = 0L,
+      last_checked            = Sys.time(),
+      current_user_agent_id   = 0L,
+      processing_flag         = "normal"
+    ),
+    fill = TRUE
+  )
+}
+  
+  # remove intermediate data tables
+  rm(step_10_input_dt,
+   step_10_string_excluded_dt,
+   step_10_remaining_dt,
+   step_10_date_excluded_dt,
+   root_entry)
+
+cat("Step 10 completed: individual progression, output and response tables initialized, master_dt updated.\n")
+```
+
+
+```{r Step 11: Calling the Master Loop}
+# Open a log file in the output folder and redirect console output to it
+step_11_log_filepath <- file.path(step_1_logging_folder, "master_loop_log.txt")
+
+# Start sinking both to file and console
+sink(step_11_log_filepath, append = TRUE, split = TRUE)
+
+# Invoke the master loop function
+step_9_master_loop_func()
+
+# Stop sinking and restore normal console output
+sink()
+```
+
+
+```{r Step 12: Wrangling and saving outputs, generating retry_progression_dts}
+# Step 12: Wrangle Outputs and Save
+# This chunk removes the "sort_order" column, collects excluded-by-string errors,
+# cleans empty logs, builds retry tables, and saves all relevant objects.
+step_12_wrangle_and_save_func <- function() {
+  # 1. Remove "sort_order" from all progression tables
+  prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
+  for (nm in prog_names) {
+    dt <- get(nm, envir = .GlobalEnv)
+    if ("sort_order" %in% names(dt)) {
+      dt[, sort_order := NULL]
+    }
+    assign(nm, dt, envir = .GlobalEnv)
+  }
+
+  # 2. Collect "excluded_by_string" entries into global_error_dt
+  for (nm in prog_names) {
+    dt   <- get(nm, envir = .GlobalEnv)
+    excl <- dt[processing_status == "excluded_by_string", ]
+    if (nrow(excl) > 0L) {
+      start_id <- nrow(global_error_dt) + 1L
+      new_ids  <- seq(start_id, length.out = nrow(excl))
+      err_dt <- data.table(
+        domain_id       = excl$domain_id,
+        domain_url      = excl$domain_url,
+        layer_1_url_id  = excl$layer_1_url_id,
+        layer_1_url     = excl$layer_1_url,
+        error_url_id    = new_ids,
+        error_url       = excl$current_url,
+        parent_url_id   = excl$parent_url_id,
+        root_tag        = excl$root_tag,
+        error_category  = "excluded_string",
+        processed_flag  = TRUE,
+        retry_flag      = FALSE,
+        timestamp       = excl$timestamp,
+        status_code     = excl$status_code,
+        source_function = "step_8"
+      )
+      global_error_dt <<- unique(rbind(global_error_dt, err_dt, fill = TRUE))
+    }
+  }
+
+  # 3. Remove empty response-log tables
+  resp_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_response_log_dt$")
+  for (nm in resp_names) {
+    dt <- get(nm, envir = .GlobalEnv)
+    if (nrow(dt) == 0L) {
+      rm(list = nm, envir = .GlobalEnv)
+    }
+  }
+
+  # 4. Build retry_master_dt
+  retry_master_dt <<- copy(global_master_dt[input_processing_status == "partially_processed_and_moved_to_retry"])
+  if (nrow(retry_master_dt) > 0L) {
+    retry_master_dt[, `:=`(
+      input_processing_status = "in_progress",
+      total_request_count     = 0L,
+      total_urslets_scraped   = 0L,
+      current_user_agent_id   = 0L,
+      last_checked            = as.POSIXct(NA),
+      processing_flag         = "normal"
+    )]
+  }
+
+  # 5. Create retry progression tables
+  for (i in seq_len(nrow(retry_master_dt))) {
+    lid    <- retry_master_dt$layer_1_url_id[i]
+    resp_nm <- paste0("sitemap_id_", lid, "_response_log_dt")
+    if (!exists(resp_nm, envir = .GlobalEnv)) next
+    resp_dt <- get(resp_nm, envir = .GlobalEnv)[retry_flag == TRUE]
+    if (nrow(resp_dt) == 0L) next
+
+    retry_prog_nm <- paste0("sitemap_id_", lid, "_retry_progression_dt")
+    cols <- c(
+      "domain_id","domain_url","layer_1_url_id","layer_1_url",
+      "current_url_id","current_url","parent_url_id","processed",
+      "processing_status","sorted","sort_place","in_range",
+      "root_tag","subsitemap_status","subsitemap_progress",
+      "pagination_group","pagination_index","pagination_group_status",
+      "timestamp",
+      "http_status_code","http_status_message",
+      "response_header_snippet","response_body_snippet",
+      "response_category","action_taken"
+    )
+    
+    out_dt <- data.table(
+      domain_id = integer(),
+      domain_url = character(),
+      layer_1_url_id = integer(),
+      layer_1_url = character(),
+      current_url_id = integer(),
+      current_url = character(),
+      parent_url_id = integer(),
+      processed = logical(),
+      processing_status = character(),
+      sorted = character(),
+      sort_place = integer(),
+      in_range = character(),
+      root_tag = character(),
+      subsitemap_status = character(),
+      subsitemap_progress = character(),
+      pagination_group = character(),
+      pagination_index = integer(),
+      pagination_group_status = character(),
+      timestamp = as.POSIXct(character()),
+      http_status_code = integer(),
+      http_status_message = character(),
+      response_header_snippet = character(),
+      response_body_snippet = character(),
+      response_category = character(),
+      action_taken = character()
+    )
+    
+    for (j in seq_len(nrow(resp_dt))) {
+      r <- resp_dt[j]
+      row <- data.table(
+        domain_id               = r$Domain_id,
+        domain_url              = r$Domain_url,
+        layer_1_url_id          = r$Layer_1_url_id,
+        layer_1_url             = r$Layer_1_url,
+        current_url_id          = r$requested_url_id,
+        current_url             = r$requested_url,
+        parent_url_id           = NA_integer_,
+        processed               = FALSE,
+        processing_status       = "in_progress",
+        sorted                  = "no",
+        sort_place              = NA_integer_,
+        in_range                = NA_character_,
+        root_tag                = "unknown",
+        subsitemap_status       = NA_character_,
+        subsitemap_progress     = NA_character_,
+        pagination_group        = NA_character_,
+        pagination_index        = NA_integer_,
+        pagination_group_status = NA_character_,
+        timestamp               = r$timestamp,
+        http_status_code        = r$http_status_code,
+        http_status_message     = r$http_status_message,
+        response_header_snippet = r$response_header_snippet,
+        response_body_snippet   = r$response_body_snippet,
+        response_category       = r$response_category,
+        action_taken            = r$action_taken
+      )
+      out_dt <- rbind(out_dt, row, fill = TRUE)
+    }
+    assign(retry_prog_nm, out_dt, envir = .GlobalEnv)
+  }
+
+  # 6. Save all objects as .rds
+  save_list <- c(
+    ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$"),
+    ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_output_dt$"),
+    ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_response_log_dt$"),
+    ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_retry_progression_dt$"),
+    "global_master_dt","global_error_dt"
+  )
+  for (nm in save_list) {
+    obj <- get(nm, envir = .GlobalEnv)
+    saveRDS(obj, file = file.path(step_1_output_folder, paste0(nm, ".rds")))
+  }
+}
+
+step_12_wrangle_and_save_func()
+
+```
+
+
+
+
+
