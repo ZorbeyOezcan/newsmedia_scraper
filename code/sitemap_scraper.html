@@ -1028,7 +1028,7 @@ step_6_cleaned_df &lt;- step_6_cleaned_df %&gt;%
 
 # p1 all sitemaps: 
 p1_all_sitemaps &lt;- bind_rows(step_6_cleaned_df, export_broken_sitemaps)
-write.csv(p1_all_sitemaps, &quot;/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_all_sitemaps.csv&quot;, row.names = FALSE)
+write.csv(p1_all_sitemaps, &quot;/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_all_sitemaps.csv&quot;, row.names = FALSE)
 
 # p1 clean sitemaps: 
 p1_clean_sitemaps &lt;- step_6_cleaned_df %&gt;%
@@ -1070,7 +1070,7 @@ p1_excluded_sitemaps &lt;- bind_rows(
       )
   )
 
-write.csv(p1_excluded_sitemaps, &quot;/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_excluded_sitemaps.csv&quot;, row.names = FALSE)
+write.csv(p1_excluded_sitemaps, &quot;/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_excluded_sitemaps.csv&quot;, row.names = FALSE)
 
 # Summary 
 print(paste(nrow(p1_all_sitemaps), &quot;total entries exported to: p1_all_sitemaps&quot;))
@@ -1171,7 +1171,7 @@ every step and prints a deubg file.</h2>
 
   # Save debug data if available
   if (!is.null(step_7_debug_data) &amp;&amp; nrow(step_7_debug_data) &gt; 0) {
-    write.csv(step_7_debug_data,&quot;/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_debug_sitemap_data.csv&quot;, row.names = FALSE)
+    write.csv(step_7_debug_data,&quot;/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_debug_sitemap_data.csv&quot;, row.names = FALSE)
   }
 
 
@@ -1198,7 +1198,7 @@ step_7_report_content &lt;- c(
 )
 
 # Save and render report
-step_7_report_path &lt;- &quot;/Users/zorbeyozcan/HA_NewsMedia/data/clean_data/output_data/p1_report_sitemap_scraper.md&quot;
+step_7_report_path &lt;- &quot;/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_report&quot;
 writeLines(step_7_report_content, step_7_report_path)
 rmarkdown::render(step_7_report_path, output_format = &quot;pdf_document&quot;)
 

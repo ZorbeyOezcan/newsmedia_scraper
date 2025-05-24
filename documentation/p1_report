@@ -1,0 +1,21 @@
+# Final Report
+## Overall Summary
+|Step                                            | Total_Items| Successful| Partially_Successful|
+|:-----------------------------------------------|-----------:|----------:|--------------------:|
+|Step 1: Robots.txt URLs Retrieval               |          91|         89|                    2|
+|Step 2: Robots.txt Contents Retrieval           |          91|         89|                    2|
+|Step 3: Sitemap URLs Extraction from Robots.txt |          91|        184|                   33|
+|Step 4: Typical Sitemap URLs Retrieval          |         269|        258|                   11|
+|Step 5: Sitemap Contents Retrieval              |         442|        441|                    1|
+|Step 6: Final Data                              |         168|          0|                    0|
+## Detailed Metrics
+### Step 1: 89 of 91 robots.txt URLs retrieved
+### Step 2: 89 of 91 robots.txt contents retrieved
+### Step 3: 184 of 217 sitemap URLs extracted
+### Step 4: 258 of 269 typical sitemap URLs found
+### Step 5: 441 of 442 sitemap contents retrieved
+### Step 6: Final dataset includes 168 of 168 domains
+## Domain-Level Summary
+### Input domains: 91
+### Domains with valid sitemaps: 66
+### Domains without sitemaps: 25
