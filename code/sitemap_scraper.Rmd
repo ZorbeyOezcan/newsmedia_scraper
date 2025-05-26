@@ -634,10 +634,10 @@ step_6_cleaned_df <- step_6_cleaned_df %>%
 
 # p1 all sitemaps: 
 p1_all_sitemaps <- bind_rows(step_6_cleaned_df, export_broken_sitemaps)
-write.csv(p1_all_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_all_sitemaps.csv", row.names = FALSE)
+write.csv(p1_all_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/working_data/sitemap_scraper_output/p1_all_sitemaps.csv", row.names = FALSE)
 
 # p1 clean sitemaps: 
-p1_clean_sitemaps <- step_6_cleaned_df %>%
+sitemap_scraper_clean_sitemaps <- step_6_cleaned_df %>%
   transmute(
     domain_id = as.numeric(factor(domain_url)),         
     domain_url = domain_url,
@@ -645,7 +645,7 @@ p1_clean_sitemaps <- step_6_cleaned_df %>%
   ) %>%
   mutate(layer_1_url_id = row_number()) %>%            
   select(domain_id, domain_url, layer_1_url_id, layer_1_url)
-write.csv(p1_clean_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/data/p1_clean_sitemaps.csv", row.names = FALSE) 
+write.csv(sitemap_scraper_clean_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/data/sitemap_scraper_clean_sitemaps.csv", row.names = FALSE) 
 
 
 # p1 excluded sitemaps:
@@ -676,11 +676,11 @@ p1_excluded_sitemaps <- bind_rows(
       )
   )
 
-write.csv(p1_excluded_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_excluded_sitemaps.csv", row.names = FALSE)
+write.csv(p1_excluded_sitemaps, "/Users/zorbeyozcan/newsmedia_scraper/working_data/sitemap_scraper_output/p1_excluded_sitemaps.csv", row.names = FALSE)
 
 # Summary 
 print(paste(nrow(p1_all_sitemaps), "total entries exported to: p1_all_sitemaps"))
-print(paste(nrow(p1_clean_sitemaps), "clean entries exported to: p1_clean_sitemaps"))
+print(paste(nrow(sitemap_scraper_clean_sitemaps), "clean entries exported to: sitemap_scraper_clean_sitemaps"))
 print(paste(nrow(p1_excluded_sitemaps), "excluded entries exported to: p1_excluded_sitemaps"))
 
 
@@ -776,7 +776,7 @@ step_7_generate_final_report <- function() {
 
   # Save debug data if available
   if (!is.null(step_7_debug_data) && nrow(step_7_debug_data) > 0) {
-    write.csv(step_7_debug_data,"/Users/zorbeyozcan/newsmedia_scraper/working_data/p1_debug_sitemap_data.csv", row.names = FALSE)
+    write.csv(step_7_debug_data,"/Users/zorbeyozcan/newsmedia_scraper/working_data/sitemap_scraper_output/p1_debug_sitemap_data.csv", row.names = FALSE)
   }
 
 
@@ -803,7 +803,7 @@ step_7_report_content <- c(
 )
 
 # Save and render report
-step_7_report_path <- "/Users/zorbeyozcan/newsmedia_scraper/documentation/p1_report"
+step_7_report_path <- "/Users/zorbeyozcan/newsmedia_scraper/documentation/sitema_scraper_report"
 writeLines(step_7_report_content, step_7_report_path)
 rmarkdown::render(step_7_report_path, output_format = "pdf_document")
 
