@@ -2154,7 +2154,346 @@ sink()
 
 ```
 
-## Code Chunk 12: Wrangling and Saving Outputs, Generating Retry Progression Tables
+## Step 12: Revalidating Index Sitemaps via Wayback CDX API
+
+### Summary:
+This code chunk integrates the Internet Archive’s CDX API to retrieve historical snapshots of each `<sitemapindex>` URL, re-extracts archived child links within a specified date window, and updates the internal progression and master tables accordingly. It operates on the global progression tables produced by previous steps and generates both a temporary Wayback progression table and a final overview table summarizing snapshot availability and new entries. The primary input is the set of progression data tables for each top-level sitemap, and the outputs include per-sitemap “wayback” progression tables (if snapshots are found) and an aggregated `step_12_overview_dt` data table. This process enhances coverage by back-filling any missed links from archived versions, ensuring a more complete corpus for sociotechnical analysis.
+
+In this chunk, we first define a helper function to query the Wayback Machine CDX API for available snapshot timestamps of a given URL. We then assemble all `<sitemapindex>` entries from the global progression tables into a single data table. For each unique `layer_1_url_id`, we initialize an empty “wayback” progression table and iterate over each subsitemap URL, fetching snapshot timestamps and filtering them by the global date constraints. Valid snapshots are downloaded, parsed to extract `<loc>` elements, converted to new progression entries, and fed into the existing progression and master update functions. Finally, we compile a summary overview in `step_12_overview_dt` that records whether any snapshots were found and how many new entries were added.
+
+#### Function: step_12_get_snapshots_func
+The `step_12_get_snapshots_func` queries the CDX API endpoint for a JSON list of snapshot timestamps for a given URL, handling HTTP errors and rate limits explicitly. It performs an HTTP GET with query parameters for URL, output format, and requested fields, and checks for a 429 status to gracefully return an empty vector if rate-limited. Upon successful retrieval, it parses the JSON response, discards the header row, and returns a character vector of raw timestamp strings. This function encapsulates API interaction and enforces a simple contract: always return a vector (possibly empty) of timestamp identifiers for downstream processing.
+
+```{r Step 12: Calling the wayback API and looking for snapshots of sitemaps}
+# Define helper to fetch all snapshot timestamps from Wayback CDX API
+step_12_get_snapshots_func <- function(url) {
+  res <- httr::GET(
+    "http://web.archive.org/cdx/search/cdx",
+    query = list(url = url, output = "json", fl = "timestamp")
+  )
+  if (httr::status_code(res) == 429) {
+    cat(sprintf("CDX API: 429 Rate Limit reached for URL: %s\n", url))
+    return(character(0))
+  }
+  httr::stop_for_status(res)
+  entries <- jsonlite::fromJSON(httr::content(res, as = "text", encoding = "UTF-8"))
+  unlist(entries[-1])  # drop header row and return timestamps
+}
+
+# Collect all sitemapindex entries across progression tables
+step_12_wayback_validation_dt <- data.table::rbindlist(
+  lapply(
+    ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$"),
+    function(prog_name) {
+      dt <- get(prog_name, envir = .GlobalEnv)
+      data.table::copy(dt)[
+        root_tag == "sitemapindex",
+        .(domain_id, domain_url, layer_1_url_id, layer_1_url,
+          current_url_id, current_url, parent_url_id, root_tag)
+      ]
+    }
+  ),
+  use.names = TRUE, fill = TRUE
+)
+
+# Initialize overview table for summary of Wayback integration
+step_12_overview_dt <- data.table::data.table(
+  layer_1_url_id = integer(),
+  layer_1_url = character(),
+  wayback_snapshot = logical(),
+  added_wayback_entries = integer()
+)
+
+# Iterate by unique layer_1_url_id to process Wayback snapshots
+for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
+  subset_dt <- step_12_wayback_validation_dt[layer_1_url_id == lid]
+  snapshot_found <- FALSE
+  total_new <- 0L
+
+  prog_name <- paste0("sitemap_id_", lid, "_progression_dt")
+  template_dt <- get(prog_name, envir = .GlobalEnv)[0]
+  wayback_name <- paste0("sitemap_id_", lid, "_wayback_dt")
+  assign(wayback_name, data.table::copy(template_dt), envir = .GlobalEnv)
+
+  for (i in seq_len(nrow(subset_dt))) {
+    row <- subset_dt[i]
+    cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
+    timestamps <- step_12_get_snapshots_func(row$current_url)
+    Sys.sleep(4)  # pause required by CDX-API
+    dates <- lubridate::ymd(substr(timestamps, 1, 8))
+    sel_idx <- which(dates >= global_wayback_date_start & dates <= global_wayback_date_end)
+    cat(sprintf("Snapshots in selected range: %d\n", length(sel_idx)))
+
+    if (length(sel_idx) > 0L) {
+      snapshot_found <- TRUE
+      for (j in sel_idx) {
+        ts <- timestamps[j]
+        raw_url <- sprintf("http://web.archive.org/web/%sid_/%s", ts, row$current_url)
+        resp <- try(httr::GET(raw_url, httr::timeout(30)), silent = TRUE)
+
+        if (inherits(resp, "try-error") || httr::status_code(resp) >= 400) {
+          cat(sprintf("Failed to load snapshot at: %s – skipping\n", raw_url))
+          next
+        }
+
+        xml_text <- httr::content(resp, as = "text", encoding = "UTF-8")
+        doc <- xml2::read_xml(xml_text)
+        ns_map <- xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns")
+        loc_nodes <- xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map)
+        links <- xml2::xml_text(loc_nodes)
+
+        if (length(links) > 0L) {
+          existing_dt <- get(prog_name, envir = .GlobalEnv)
+          next_id <- max(existing_dt$current_url_id, na.rm = TRUE) + 1L
+          new_rows <- lapply(seq_along(links), function(k) {
+            data.table::data.table(
+              domain_id = row$domain_id,
+              domain_url = row$domain_url,
+              layer_1_url_id = row$layer_1_url_id,
+              layer_1_url = row$layer_1_url,
+              current_url_id = next_id + k - 1L,
+              current_url = links[k],
+              parent_url_id = row$current_url_id,
+              processed = FALSE,
+              processing_status = "in_progress",
+              sorted = "no",
+              sort_place = NA_integer_,
+              in_range = NA_character_,
+              root_tag = "unknown",
+              subsitemap_status = NA_character_,
+              sort_order = list(data.table::data.table()),
+              subsitemap_progress = NA_character_,
+              pagination_group = NA_character_,
+              pagination_index = NA_integer_,
+              pagination_group_status = NA_character_,
+              timestamp = Sys.time()
+            )
+          }) |> data.table::rbindlist()
+
+          wayback_dt <- get(wayback_name, envir = .GlobalEnv)
+          wayback_dt <- rbind(wayback_dt, new_rows, fill = TRUE)
+          assign(wayback_name, wayback_dt, envir = .GlobalEnv)
+
+          for (row_new in seq_len(nrow(new_rows))) {
+            nr <- new_rows[row_new]
+            step_7_1_progression_update(
+              domain_id = nr$domain_id,
+              domain_url = nr$domain_url,
+              layer_1_url_id = nr$layer_1_url_id,
+              layer_1_url = nr$layer_1_url,
+              current_url = nr$current_url,
+              parent_url_id = nr$parent_url_id,
+              processed = nr$processed,
+              processing_status = nr$processing_status,
+              sorted = nr$sorted,
+              sort_place = nr$sort_place,
+              in_range = nr$in_range,
+              root_tag = nr$root_tag,
+              subsitemap_status = nr$subsitemap_status,
+              subsitemap_progress = nr$subsitemap_progress,
+              pagination_group = nr$pagination_group,
+              pagination_index = nr$pagination_index,
+              pagination_group_status = nr$pagination_group_status
+            )
+            total_new <- total_new + 1L
+          }
+
+          step_7_2_master_dt_update_func(
+            domain_id = row$domain_id,
+            domain_url = row$domain_url,
+            l1_id = row$layer_1_url_id,
+            layer_1_url = row$layer_1_url,
+            request_increment = 0L,
+            current_user_agent_id = NA_integer_
+          )
+        }
+      }
+    }
+  }
+
+  # Record summary info per layer_1_url_id
+  step_12_overview_dt <- rbind(
+    step_12_overview_dt,
+    data.table::data.table(
+      layer_1_url_id = lid,
+      layer_1_url = subset_dt$layer_1_url[1],
+      wayback_snapshot = snapshot_found,
+      added_wayback_entries = total_new
+    ),
+    fill = TRUE
+  )
+
+  # Remove temp wayback dt if snapshot was found
+  if (snapshot_found) rm(list = wayback_name, envir = .GlobalEnv)
+}
+
+
+cat("Step 12 completed: Indexsitemaps revalidated.\n")
+
+```
+
+## Step 13: Revalidating Out-of-Range URLSets via Wayback CDX API
+
+This code chunk complements the previous Wayback integration by targeting all `<urlset>` entries that were excluded for being out of the defined date range. It retrieves archived versions of each out-of-range URLSET, parses any valid snapshots, and reinserts eligible links into the main output and progression tables. The primary input is the set of global progression tables filtered for `root_tag == "urlset" & in_range == "out_of_range"`, and the outputs include an updated `step_13_overview_dt` summary table and any newly scraped URLSET entries integrated via the existing scraper and master-update functions. This mechanism back-fills missing content from archival snapshots, ensuring a more temporally complete corpus for downstream sociotechnical analysis.
+
+### Summary:
+This chunk first enumerates all progression tables in the global environment and filters them for `<urlset>` entries that were marked “out_of_range.” It then iterates per unique `layer_1_url_id`, invoking the previously defined `step_12_get_snapshots_func` to obtain CDX snapshot timestamps and selecting those within the `global_wayback_date_start` and `global_wayback_date_end` window. For each valid snapshot, it constructs the Wayback Machine URL, retrieves and parses the XML, and—if not already present—processes it through `step_7_4_urlset_scraper_func` to extract `<loc>` links. Finally, it updates the global master table via `step_7_2_master_dt_update_func` and records per-sitemap summary metrics in `step_13_overview_dt`.
+
+#### Inputs:
+- Global progression tables named `sitemap_id_<n>_progression_dt`, filtered for `root_tag == "urlset" & in_range == "out_of_range"`.
+- Date boundaries `global_wayback_date_start` and `global_wayback_date_end`.
+- Helper functions: `step_12_get_snapshots_func`, `step_7_4_urlset_scraper_func`, and `step_7_2_master_dt_update_func`.
+
+#### Outputs:
+- An aggregated data table `step_13_wayback_validation_urlset_dt` listing all out-of-range URLSET entries.
+- A summary overview `step_13_overview_dt` containing `layer_1_url_id`, `layer_1_url`, a boolean `wayback_snapshot`, and the count `added_wayback_entries`.
+- Updated output tables `sitemap_id_<n>_output_dt` enriched with any newly scraped URLSET content.
+- Corresponding updates to the global master and progression tables for each successfully retrieved snapshot.
+
+```{r step 13: Calling the wayback API and looking for snapshots of urlsets }
+# Load all progression tables and extract URLSET entries that were out-of-range
+prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
+list_urlset_dt <- lapply(prog_names, function(prog_nm) {
+  prog_dt <- get(prog_nm, envir = .GlobalEnv)
+  # Filter for urlset root tags with out-of-range dates
+  prog_dt[root_tag == "urlset" & in_range == "out_of_range",
+          .(domain_id,
+            domain_url,
+            layer_1_url_id,
+            layer_1_url,
+            current_url_id,
+            current_url,
+            parent_url_id,
+            root_tag)]
+})
+# Combine into a single data.table
+step_13_wayback_validation_urlset_dt <- data.table::rbindlist(
+  list_urlset_dt, use.names = TRUE, fill = TRUE
+)
+
+# Initialize overview table
+step_13_overview_dt <- data.table::data.table(
+  layer_1_url_id = integer(),
+  layer_1_url = character(),
+  wayback_snapshot = logical(),
+  added_wayback_entries = integer()
+)
+
+# Iterate over each unique layer_1_url_id
+for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
+  subset_dt <- step_13_wayback_validation_urlset_dt[layer_1_url_id == lid]
+  snapshot_found <- FALSE
+  total_new <- 0L
+
+  for (i in seq_len(nrow(subset_dt))) {
+    row <- subset_dt[i]
+
+    cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
+    timestamps <- step_12_get_snapshots_func(row$current_url)
+    dates <- lubridate::ymd(substr(timestamps, 1, 8))
+    sel_idx <- which(dates >= global_wayback_date_start &
+                     dates <= global_wayback_date_end)
+    cat(sprintf("Snapshots in selected range: %d\n", length(sel_idx)))
+
+    if (length(sel_idx) > 0L) {
+      snapshot_found <- TRUE
+
+      for (j in sel_idx) {
+        ts <- timestamps[j]
+        wayback_url <- sprintf("http://web.archive.org/web/%sid_/%s", ts, row$current_url)
+        resp <- try(httr::GET(wayback_url, httr::timeout(30)), silent = TRUE)
+
+        if (inherits(resp, "try-error") || httr::status_code(resp) >= 400L) {
+          cat(sprintf("Failed to load snapshot at: %s – skipping\n", wayback_url))
+          next
+        }
+
+        out_nm <- paste0("sitemap_id_", lid, "_output_dt")
+        out_dt <- get(out_nm, envir = .GlobalEnv)
+
+        if (!wayback_url %in% out_dt$urlset_url) {
+          # Report valid snapshot URL
+          cat(sprintf("Valid snapshot found in range: %s\n", wayback_url))
+
+          # Process with step_7_4 function
+          res <- step_7_4_urlset_scraper_func(
+            url               = wayback_url,
+            http_response     = resp,
+            xml_doc           = NULL,
+            global_date_start = global_date_start,
+            global_date_end   = global_date_end,
+            domain_id         = row$domain_id,
+            domain_url        = row$domain_url,
+            layer_1_url_id    = lid,
+            layer_1_url       = row$layer_1_url,
+            current_url_id    = row$current_url_id,
+            parent_url_id     = row$parent_url_id
+          )
+
+          if (!is.null(res) && isTRUE(res$in_range)) {
+            total_new <- total_new + 1L
+          }
+        }
+
+        step_7_2_master_dt_update_func(
+          domain_id             = row$domain_id,
+          domain_url            = row$domain_url,
+          l1_id                 = lid,
+          layer_1_url           = row$layer_1_url,
+          request_increment     = 0L,
+          current_user_agent_id = NA_integer_
+        )
+      }
+    }
+  }
+
+  step_13_overview_dt <- rbind(
+    step_13_overview_dt,
+    data.table::data.table(
+      layer_1_url_id        = lid,
+      layer_1_url           = subset_dt$layer_1_url[1],
+      wayback_snapshot      = snapshot_found,
+      added_wayback_entries = total_new
+    ),
+    fill = TRUE
+  )
+}
+
+
+cat("Step 13 completed: Urlsets out of range revalidated.\n")
+
+```
+
+## Code Chunk 14: Calling the Master Loop for Wayback Links
+
+### Summary:
+This chunk re-invokes the master processing loop to handle any new sitemap or URLSET entries added from the Wayback snapshots. It redirects output to a dedicated log file (`urlset_scraper_master_loop_log__wayback.txt`) while still printing to the console, ensuring traceable execution.
+
+#### Inputs:
+- Updated global progression and output tables containing Wayback‐derived entries.
+- The `step_9_master_loop_func` itself, which orchestrates recursive sitemap processing.
+
+#### Outputs:
+- Continued updates to `global_master_dt`, progression tables, and output tables as new links are processed.
+- Detailed logs in the specified Wayback‐focused log file.
+
+```{r: Step 14: Calling the master loop again to process the new wayback links}
+
+# Define the log file path for step 14
+step_14_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_master_loop_log__wayback.txt")
+
+# Redirect all console output to the log file and the console
+sink(step_14_log_filepath, append = TRUE, split = TRUE)
+
+# Invoke the master loop function to process any remaining sitemap entries
+step_9_master_loop_func()
+
+# Stop redirecting and restore normal console output
+sink()
+
+```
+
+## Code Chunk 15: Wrangling and Saving Outputs, Generating Retry Progression Tables
 
 ### Summary:
 
@@ -2166,10 +2505,10 @@ This final processing step performs post-scraping wrangling and persistence oper
 
 **Outputs:**  
 - Updated global error log (`global_error_dt`) including string-based exclusions.  
-- Retry structures: `retry_master_dt`, individual `*_retry_progression_dt` tables.  
+- Retry structures: `global_retry_master_dt`, individual `*_retry_progression_dt` tables.  
 - `.rds` files for all major progression, output, and log tables saved in `step_1_output_folder`.
 
-### function: step_12_wrangle_and_save_func
+### function: step_15_wrangle_and_save_func
 
 This function executes the complete post-processing logic in six stages:
 
@@ -2191,11 +2530,12 @@ This function executes the complete post-processing logic in six stages:
 6. **Serialize All Objects:**  
    All relevant objects—including progression, output, response, and retry tables—are saved as `.rds` files within the specified output directory for later reuse.
 
-```{r Step 12: Wrangling and saving outputs, generating retry_progression_dts}
-# Step 12: Wrangle Outputs and Save
+
+```{r Step 15: Wrangling and saving outputs, generating retry_progression_dts}
+# Step 15: Wrangle Outputs and Save
 # This chunk removes the "sort_order" column, collects excluded-by-string errors,
 # cleans empty logs, builds retry tables, and saves all relevant objects.
-step_12_wrangle_and_save_func <- function() {
+step_15_wrangle_and_save_func <- function() {
   # 1. Remove "sort_order" from all progression tables
   prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
   for (nm in prog_names) {
@@ -2242,10 +2582,10 @@ step_12_wrangle_and_save_func <- function() {
     }
   }
 
-  # 4. Build retry_master_dt
-  retry_master_dt <<- copy(global_master_dt[input_processing_status == "partially_processed_and_moved_to_retry"])
-  if (nrow(retry_master_dt) > 0L) {
-    retry_master_dt[, `:=`(
+  # 4. Build global_retry_master_dt
+  global_retry_master_dt <<- copy(global_master_dt[input_processing_status == "partially_processed_and_moved_to_retry"])
+  if (nrow(global_retry_master_dt) > 0L) {
+    global_retry_master_dt[, `:=`(
       input_processing_status = "in_progress",
       total_request_count     = 0L,
       total_urlsets_scraped   = 0L,
@@ -2256,8 +2596,8 @@ step_12_wrangle_and_save_func <- function() {
   }
 
   # 5. Create retry progression tables
-  for (i in seq_len(nrow(retry_master_dt))) {
-    lid    <- retry_master_dt$layer_1_url_id[i]
+  for (i in seq_len(nrow(global_retry_master_dt))) {
+    lid    <- global_retry_master_dt$layer_1_url_id[i]
     resp_nm <- paste0("sitemap_id_", lid, "_response_log_dt")
     if (!exists(resp_nm, envir = .GlobalEnv)) next
     resp_dt <- get(resp_nm, envir = .GlobalEnv)[retry_flag == TRUE]
@@ -2344,7 +2684,7 @@ step_12_wrangle_and_save_func <- function() {
     ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_output_dt$"),
     ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_response_log_dt$"),
     ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_retry_progression_dt$"),
-    "global_master_dt","global_error_dt"
+    "global_master_dt","global_error_dt", "global_retry_master_dt"
   )
   for (nm in save_list) {
     obj <- get(nm, envir = .GlobalEnv)
@@ -2352,10 +2692,10 @@ step_12_wrangle_and_save_func <- function() {
   }
 }
 
-step_12_wrangle_and_save_func()
+step_15_wrangle_and_save_func()
 
 
-cat("Step 12 completed: All date cleaned and saved.\n")
+cat("Step 15 completed: All date cleaned and saved.\n")
 
 ```
 
