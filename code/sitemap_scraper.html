@@ -357,57 +357,27 @@ display: none;
 </div>
 
 
-<div id="what-does-this-code-do" class="section level1">
-<h1>What does this code do?</h1>
-<p>This code generates data and produces the final prodcut of phase 1 of
-the NewsMedia data collection process.</p>
-<p>It takes a list of news media domain names, that are integrated into
-the paberboy r package by <span class="citation">@JBGruber</span>. It
-returns data containing all publicly available sitemaps of those domain
-names.</p>
-<div id="the-data-includes" class="section level2">
-<h2>The data includes:</h2>
-<p>A data.frame with the columns:</p>
-<hr />
-<table style="width:100%;">
-<colgroup>
-<col width="14%" />
-<col width="14%" />
-<col width="14%" />
-<col width="14%" />
-<col width="14%" />
-<col width="14%" />
-<col width="14%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th></th>
-<th>domain_urls</th>
-<th>robots_urls</th>
-<th>robots_contents</th>
-<th>sitemap_urls</th>
-<th>sitemap_contents</th>
-<th>sitemap_check</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><strong>1</strong></td>
-<td>the url of the domain</td>
-<td>the url of the robots.txt file</td>
-<td>the contents of the robots.txt file</td>
-<td>the url of the sitemap.xml file</td>
-<td>the contents of the sitemap.xml file</td>
-<td>a check or comment for that entry</td>
-</tr>
-</tbody>
-</table>
-</div>
-<div id="limitations" class="section level2">
-<h2>Limitations:</h2>
-<p>In this project, I only focus on scraping German news media articles.
-For that reason, the list contains only German news media publications.
-- Not all sitemaps are available</p>
+<div id="overview-of-the-sitemap-scraper-workflow" class="section level1">
+<h1>Overview of the Sitemap Scraper Workflow</h1>
+<p>This R Markdown document implements a structured, multi-stage
+scraping pipeline designed to identify, extract, and validate sitemap
+URLs from a predefined set of German-language news media domains. The
+primary objective is to support reproducible research in the social
+sciences by enabling scalable and systematic collection of article-level
+metadata via publicly accessible sitemap structures.</p>
+<p>The workflow is organized into a sequence of clearly defined steps,
+beginning with domain collection, followed by the retrieval of
+<code>robots.txt</code> files, extraction and validation of sitemap
+URLs, and culminating in a rigorous filtering and export process. Each
+code chunk performs a specific role in this pipeline and is annotated
+with precise comments to facilitate replication.</p>
+<p>The pipeline employs a combination of HTTP requests, regular
+expressions, content parsing, and logical filtering operations.
+Intermediate results are stored and debugged where necessary, and the
+environment is cleaned at the end to ensure transparency and memory
+efficiency. The final outputs are exported as structured
+<code>.csv</code> files that distinguish between successfully retrieved
+sitemaps and those excluded due to irrelevance or error.</p>
 <pre class="r"><code># knitting Options 
 knitr::opts_chunk$set(
   echo    = TRUE,       
@@ -432,6 +402,26 @@ library(dplyr)</code></pre>
 <pre><code>## Warning: package &#39;rmarkdown&#39; was built under R version 4.2.3</code></pre>
 <pre class="r"><code>library(rvest)</code></pre>
 <pre><code>## Warning: package &#39;rvest&#39; was built under R version 4.2.3</code></pre>
+<div id="code-chunk-retrieving-input-data-from-github-repository" class="section level2">
+<h2>Code Chunk: Retrieving Input Data from GitHub Repository</h2>
+<div id="summary" class="section level3">
+<h3>Summary:</h3>
+<p>This code chunk initializes the scraping workflow by retrieving a
+structured list of domains from a publicly available GitHub repository.
+The HTML content of the specified GitHub page is parsed to extract
+embedded tables, from which a subset of German-language media domains is
+selected. This serves as the input foundation for all subsequent steps
+in the pipeline.</p>
+<p><strong>Inputs:</strong><br />
+- HTML content from the GitHub page at
+<code>https://github.com/JBGruber/paperboy</code>, specifically the
+sixth <code>&lt;table&gt;</code> element.</p>
+<p><strong>Outputs:</strong><br />
+- A cleaned data frame <code>global_input_all_domains</code>, which
+contains a single column <code>domain_url</code> listing filtered German
+news domains.<br />
+- A minor data correction is applied to handle a duplicated
+<code>.de</code> domain artifact.</p>
 <pre class="r"><code># Define the GitHub URL
 step_0_url &lt;- &quot;https://github.com/JBGruber/paperboy&quot;
 
@@ -456,14 +446,51 @@ global_input_all_domains &lt;- global_input_all_domains %&gt;%
                              domain_url))</code></pre>
 </div>
 </div>
-<div id="step-1" class="section level1">
-<h1>Step 1:</h1>
-<div id="this-code-chunk-takes-the-global_input_all_domains-and-searches-for-robots.txt-urls-for-all-those-domains.-it-returns-step_1_domain_urls_robotsurls_df-and-passes-it-to-the-next-chunk." class="section level2">
-<h2>This code chunk takes the global_input_all_domains and searches for
-robots.txt urls for all those domains. It returns
-step_1_domain_urls_robotsUrls_df and passes it to the next chunk.</h2>
-<div id="this-code-produces-traffic." class="section level3">
-<h3>This code produces traffic.</h3>
+<div id="code-chunk-step-1-retrieval-of-robots.txt-urls-from-input-domains" class="section level2">
+<h2>Code Chunk: Step 1 – Retrieval of robots.txt URLs from Input
+Domains</h2>
+<div id="summary-1" class="section level3">
+<h3>Summary:</h3>
+<p>This code chunk attempts to locate a valid <code>robots.txt</code>
+file for each input domain using various protocol permutations (HTTP,
+HTTPS, and HTTPS with <code>www</code>). It aims to construct and
+validate accessible URLs for each domain’s <code>robots.txt</code> file.
+Domains for which no valid <code>robots.txt</code> is found are flagged
+for debugging.</p>
+<p><strong>Inputs:</strong><br />
+- The data frame <code>global_input_all_domains</code>, containing a
+list of domain names to be tested.</p>
+<p><strong>Outputs:</strong><br />
+- <code>step_1_domain_urls_robotsUrls_df</code>: A data frame mapping
+each domain to a discovered (or missing) <code>robots.txt</code>
+URL.<br />
+- <code>step_1_1_debug_unsuccsesful_fetches_df</code>: A debug table
+listing domains for which no valid <code>robots.txt</code> could be
+retrieved.<br />
+- Summary metrics on the success rate of URL discovery are printed to
+the console.</p>
+<div id="function-step_1_robots_url_func" class="section level4">
+<h4>Function: <code>step_1_robots_url_func</code></h4>
+<p>This function receives a domain name and returns the first accessible
+URL that hosts a valid <code>robots.txt</code> file. It constructs three
+potential URLs for each domain using: 1.
+<code>http://domain/robots.txt</code> 2.
+<code>https://domain/robots.txt</code> 3.
+<code>https://www.domain/robots.txt</code></p>
+<p>Each URL is checked using an HTTP <code>HEAD</code> request. If the
+response status code is <code>200</code>, the URL is considered valid
+and returned. If none of the three URLs return a valid response, the
+function returns <code>NA</code>. The function uses
+<code>tryCatch()</code> to handle request errors gracefully and ensures
+robustness across domains with different protocol configurations.</p>
+</div>
+<div id="function-step_1_get_robots_url_func" class="section level4">
+<h4>Function: <code>step_1_get_robots_url_func</code></h4>
+<p>This is a vectorized wrapper around
+<code>step_1_robots_url_func</code>, allowing the function to be applied
+to multiple domain names simultaneously. It enables efficient processing
+of the full domain list while preserving the individual logic of the
+core retrieval function.</p>
 <pre class="r"><code># Function to retrieve robots.txt URL from a domain using different protocols
 step_1_robots_url_func &lt;- function(step_1_domain_url) {
   # Construct possible robots.txt URLs for HTTP, HTTPS, and HTTPS with www
@@ -555,12 +582,39 @@ if (step_1_valid_robots_check != step_1_total_domains_check) {
 </div>
 </div>
 </div>
-<div id="step-2" class="section level1">
-<h1>Step 2:</h1>
-<div id="this-code-chunk-takes-the-and-.-it-returns-with-." class="section level2">
-<h2>This code chunk takes the and . It returns with .</h2>
-<div id="this-code-produces-traffic.-1" class="section level3">
-<h3>This code produces traffic.</h3>
+<div id="code-chunk-step-2-retrieval-of-robots.txt-file-contents" class="section level2">
+<h2>Code Chunk: Step 2 – Retrieval of robots.txt File Contents</h2>
+<div id="summary-2" class="section level3">
+<h3>Summary:</h3>
+<p>This code chunk proceeds to download the actual contents of the
+<code>robots.txt</code> files for each domain whose URL was successfully
+identified in Step 1. For each valid URL, the content is requested via
+an HTTP <code>GET</code> call and stored as a plain text string. If the
+file is inaccessible or an error occurs, a missing value
+(<code>NA</code>) is recorded. Unsuccessful retrievals are
+systematically logged for debugging.</p>
+<p><strong>Inputs:</strong><br />
+- The <code>robots_txt</code> column from
+<code>step_1_domain_urls_robotsUrls_df</code>, containing discovered
+<code>robots.txt</code> URLs.</p>
+<p><strong>Outputs:</strong><br />
+- <code>step_2_domain_Urls_robotsUrls_robotsContents_df</code>: A new
+data frame that includes the <code>robots_txt_content</code> column with
+raw text contents.<br />
+- <code>step_2_1_debug_unsuccsesful_fetches_df</code>: A diagnostic data
+frame listing all failed attempts, including HTTP status codes and error
+metadata.</p>
+<div id="function-step_2_robots_txt_content_func" class="section level4">
+<h4>Function: <code>step_2_robots_txt_content_func</code></h4>
+<p>This function attempts to download and return the textual content of
+a specified <code>robots.txt</code> URL. First, it checks the URL’s
+availability via a <code>HEAD</code> request and prints its HTTP status
+code for transparency. If accessible (status code 200), the full file is
+fetched using a <code>GET</code> request with UTF-8 encoding. If any
+error occurs during connection or content retrieval, <code>NA</code> is
+returned. The function is wrapped in <code>tryCatch()</code> to handle
+network or timeout exceptions robustly, ensuring the scraping workflow
+remains uninterrupted.</p>
 <pre class="r"><code># Function to retrieve the content of a robots.txt file given its URL
 step_2_robots_txt_content_func &lt;- function(step_2_url) {
   # Check the HTTP status of the URL
@@ -636,12 +690,37 @@ if (step_2_valid_contents_check != step_2_total_domains_check) {
 </div>
 </div>
 </div>
-<div id="step-3" class="section level1">
-<h1>Step 3:</h1>
-<div id="this-code-chunk-takes-the-and-.-it-returns-with-.-1" class="section level2">
-<h2>This code chunk takes the and . It returns with .</h2>
-<div id="this-code-runs-locally." class="section level3">
-<h3>This code runs locally.</h3>
+<div id="code-chunk-step-3-extraction-of-sitemap-urls-from-robots.txt-files" class="section level2">
+<h2>Code Chunk: Step 3 – Extraction of Sitemap URLs from robots.txt
+Files</h2>
+<div id="summary-3" class="section level3">
+<h3>Summary:</h3>
+<p>This code chunk extracts sitemap URLs directly from the textual
+content of each domain’s <code>robots.txt</code> file. It applies a
+regular expression to identify and isolate any declared sitemap
+locations. The results are appended to the main data frame and
+classified based on the number of sitemaps discovered. This provides the
+first structured insight into the domains’ indexing architectures.</p>
+<p><strong>Inputs:</strong><br />
+- The column <code>robots_txt_content</code> from the data frame
+<code>step_2_domain_Urls_robotsUrls_robotsContents_df</code>.</p>
+<p><strong>Outputs:</strong><br />
+-
+<code>step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df</code>:
+A data frame extended with one row per extracted sitemap URL and a
+<code>sitemap_check</code> classification label.<br />
+- Console summary of domains with and without declared sitemap URLs.</p>
+<div id="function-step_3_extract_sitemap_urls_func" class="section level4">
+<h4>Function: <code>step_3_extract_sitemap_urls_func</code></h4>
+<p>This function extracts one or more sitemap URLs from a
+<code>robots.txt</code> content string. The content is first sanitized
+by collapsing line breaks into spaces to ensure pattern matching
+continuity. A case-insensitive regular expression is applied to identify
+all instances of the <code>Sitemap:</code> directive followed by an
+HTTP/HTTPS URL. The prefix is removed, and only unique sitemap links are
+returned. If no match is found, the function returns <code>NA</code>.
+The function operates independently of line structure, making it robust
+against inconsistent formatting.</p>
 <pre class="r"><code># Function to extract sitemap URLs from robots.txt content
 step_3_extract_sitemap_urls_func &lt;- function(step_3_content) {
   # Remove line breaks and replace with spaces
@@ -701,12 +780,44 @@ print(paste(&quot;Unique domains without sitemap URLs:&quot;, step_3_domains_wit
 </div>
 </div>
 </div>
-<div id="step-4" class="section level1">
-<h1>Step 4:</h1>
-<div id="this-code-chunk-takes-the-and-.-it-returns-with-.-2" class="section level2">
-<h2>This code chunk takes the and . It returns with .</h2>
-<div id="this-code-produces-traffic.-2" class="section level3">
-<h3>This code produces traffic.</h3>
+<div id="code-chunk-step-4-heuristic-discovery-of-typical-sitemap-urls" class="section level2">
+<h2>Code Chunk: Step 4 – Heuristic Discovery of Typical Sitemap
+URLs</h2>
+<div id="summary-4" class="section level3">
+<h3>Summary:</h3>
+<p>This step addresses cases where no sitemap URLs were explicitly
+declared in the <code>robots.txt</code> files. It implements a heuristic
+strategy by testing a predefined list of commonly used sitemap URL paths
+against each domain. Valid responses (HTTP status 200) are collected and
+integrated into the main dataset, thereby extending coverage to domains
+with implicit or undeclared sitemap structures.</p>
+<p><strong>Inputs:</strong><br />
+- The data frame
+<code>step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df</code>,
+filtered for domains lacking sitemap declarations
+(<code>sitemap_check == &quot;no sitemap&quot;</code>).<br />
+- A predefined vector <code>step_4_typical_sitemap_paths_vec</code>
+containing commonly observed sitemap path suffixes.</p>
+<p><strong>Outputs:</strong><br />
+- <code>step_4_1_missing_sitemaps_df</code>: A table of newly discovered
+sitemap URLs for domains that originally had none.<br />
+-
+<code>step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df</code>:
+The consolidated dataset, updated with both explicitly and heuristically
+found sitemap URLs.<br />
+- Console diagnostics reporting total, new, and unresolved sitemap
+discoveries.</p>
+<div id="function-step_4_find_typical_sitemaps_func" class="section level4">
+<h4>Function: <code>step_4_find_typical_sitemaps_func</code></h4>
+<p>This function attempts to discover valid sitemap URLs by appending a
+series of typical path suffixes to a given domain. For each constructed
+URL (e.g., <code>https://domain.com/sitemap.xml</code>), the function
+sends an HTTP <code>HEAD</code> request and evaluates the response. If
+the status code is 200, the URL is considered valid and appended to the
+result. The function is robust against network errors via
+<code>tryCatch()</code> and can return multiple sitemap links per
+domain. It supports exhaustive scanning for standardized but undeclared
+sitemap locations across diverse site structures.</p>
 <pre class="r"><code># Define typical sitemap paths
 step_4_typical_sitemap_paths_vec &lt;- c(
   &quot;/sitemap.xml&quot;, &quot;/sitemap_index.xml&quot;, &quot;/sitemap-index.xml&quot;, &quot;/sitemaps/sitemap.xml&quot;,
@@ -813,12 +924,43 @@ print(paste(&quot;This step added&quot;, step_4_new_sitemaps_added_check, &quot;
 </div>
 </div>
 </div>
-<div id="step-5" class="section level1">
-<h1>Step 5:</h1>
-<div id="this-code-chunk-takes-the-and-.-it-returns-with-.-3" class="section level2">
-<h2>This code chunk takes the and . It returns with .</h2>
-<div id="this-code-produces-traffic.-3" class="section level3">
-<h3>This code produces traffic.</h3>
+<div id="code-chunk-step-5-retrieval-of-sitemap-file-contents" class="section level2">
+<h2>Code Chunk: Step 5 – Retrieval of Sitemap File Contents</h2>
+<div id="summary-5" class="section level3">
+<h3>Summary:</h3>
+<p>This step downloads the full content of each discovered sitemap URL.
+Using HTTP <code>GET</code> requests, it attempts to retrieve both
+regular XML files and compressed <code>.gz</code> variants. For each
+sitemap, the raw content and associated HTTP status code are extracted.
+If content retrieval fails, detailed metadata are logged for diagnostic
+purposes, allowing identification of inaccessible or corrupted sitemap
+files.</p>
+<p><strong>Inputs:</strong><br />
+- The column <code>sitemap_URL</code> from the merged data frame
+<code>step_4_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_sitemapUrlsWeb_df</code>,
+which includes both explicitly declared and heuristically discovered
+sitemap links.</p>
+<p><strong>Outputs:</strong><br />
+-
+<code>step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents</code>:
+A data frame including raw <code>sitemap_content</code> and
+<code>http_status</code> metadata for each sitemap URL.<br />
+- <code>step_5_1_debug_unsuccsesful_fetches_df</code>: A debug file
+capturing all failed retrievals with indicators of whether the failed
+URL was the only sitemap associated with a given domain.</p>
+<div id="function-step_5_get_sitemap_content_func" class="section level4">
+<h4>Function: <code>step_5_get_sitemap_content_func</code></h4>
+<p>This function downloads and processes the content of a given sitemap
+URL. If the input URL is <code>NA</code>, it returns a placeholder
+result. For valid URLs, the function executes an HTTP <code>GET</code>
+request with a 120-second timeout. If the sitemap is a
+<code>.gz</code>-compressed file, the binary content is decompressed
+using <code>gzcon()</code> and then read as plain text. Non-compressed
+sitemaps are handled via direct UTF-8 decoding. The function returns a
+named list containing both the <code>content</code> (text) and
+<code>status</code> (HTTP status code or error message). All errors are
+managed via <code>tryCatch()</code> to ensure resilience against network
+issues, malformed files, and unsupported content types.</p>
 <pre class="r"><code># Function to fetch the content of a sitemap URL and capture the HTTP status or errors
 step_5_get_sitemap_content_func &lt;- function(step_5_url) {
   if (is.na(step_5_url)) {
@@ -905,12 +1047,60 @@ if (step_5_loaded_valid_sitemaps_check != step_5_total_valid_sitemaps_check) {
 </div>
 </div>
 </div>
-<div id="step-6" class="section level1">
-<h1>Step 6:</h1>
-<div id="this-code-chunk-takes-the-and-.-it-returns-with-.-4" class="section level2">
-<h2>This code chunk takes the and . It returns with .</h2>
-<div id="this-code-runs-locally.-1" class="section level3">
-<h3>This code runs locally.</h3>
+<div id="code-chunk-step-6-cleaning-filtering-and-exporting-the-final-sitemap-dataset" class="section level2">
+<h2>Code Chunk: Step 6 – Cleaning, Filtering, and Exporting the Final
+Sitemap Dataset</h2>
+<div id="summary-6" class="section level3">
+<h3>Summary:</h3>
+<p>This step performs a comprehensive filtering process to remove
+sitemap URLs that are either irrelevant, erroneous, or unsuitable for
+further analysis. Multiple exclusion criteria are applied, including the
+presence of multimedia-only content, HTML instead of XML format, dynamic
+domains without proper sitemap structures, and manually identified
+non-article sources. The remaining valid entries are assigned unique IDs
+and exported as structured CSV files for further processing or
+replication.</p>
+<p><strong>Inputs:</strong><br />
+- The data frame
+<code>step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents</code>,
+which contains raw sitemap contents and associated metadata.</p>
+<p><strong>Outputs:</strong><br />
+- <code>step_6_cleaned_df</code>: The cleaned and filtered dataset of
+valid sitemaps.<br />
+- <code>p1_all_sitemaps.csv</code>: Export of both valid and excluded
+entries.<br />
+- <code>sitemap_scraper_clean_sitemaps.csv</code>: The main cleaned
+output containing only valid, article-relevant sitemaps.<br />
+- <code>p1_excluded_sitemaps.csv</code>: A summary of all excluded
+entries, categorized by reason.</p>
+</div>
+<div id="filter-logic" class="section level3">
+<h3>Filter Logic:</h3>
+<ol style="list-style-type: decimal">
+<li><strong>Media-Only Sitemaps:</strong> Removed if the URL suggests
+image, video, podcast, or audio content
+(<code>filtered_media_sitemaps_df</code>).</li>
+<li><strong>Irrelevant Structures:</strong> Excluded based on patterns
+such as author listings, sports pages, shops, or admin pages
+(<code>filtered_irrelevant_sitemaps_df</code>).</li>
+<li><strong>HTML Content:</strong> Removed if sitemap content includes
+HTML declarations instead of XML
+(<code>filtered_html_sitemaps_df</code>).</li>
+<li><strong>Dynamic/Non-Static Domains:</strong> Manually excluded
+domains identified as JavaScript-driven or broadcast-only platforms
+(<code>filtered_dynamic_sitemaps_df</code>).</li>
+<li><strong>Manually Verified Global Exclusions:</strong> Explicit URLs
+known to contain non-article resources like tags, finance tickers, or
+advertisement indexes
+(<code>filtered_global_step_6_excluded_sitemaps_df</code>).</li>
+<li><strong>Missing Data:</strong> Entries with missing sitemap URLs or
+contents are also excluded and logged (<code>missing_sitemap_url</code>,
+<code>missing_sitemap_content</code>).</li>
+</ol>
+<p>All filtered entries are consolidated into
+<code>export_broken_sitemaps</code>, and a final filtered dataset is
+assigned per-domain unique IDs and exported in multiple forms. Summary
+statistics are printed for transparency and traceability.</p>
 <pre class="r"><code># Step 6: Clean and export final sitemap dataset
 step_6_cleaned_df &lt;- step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents
 
@@ -1078,14 +1268,43 @@ print(paste(nrow(sitemap_scraper_clean_sitemaps), &quot;clean entries exported t
 print(paste(nrow(p1_excluded_sitemaps), &quot;excluded entries exported to: p1_excluded_sitemaps&quot;))</code></pre>
 </div>
 </div>
-</div>
-<div id="step-7" class="section level1">
-<h1>Step 7:</h1>
-<div id="this-code-chunk-looks-over-the-whole-code-and-produces-a-report-for-every-step-and-prints-a-deubg-file." class="section level2">
-<h2>This code chunk looks over the whole code and produces a report for
-every step and prints a deubg file.</h2>
-<div id="this-code-runs-locally.-2" class="section level3">
-<h3>This code runs locally.</h3>
+<div id="code-chunk-step-7-generation-of-summary-report-and-debug-diagnostics" class="section level2">
+<h2>Code Chunk: Step 7 – Generation of Summary Report and Debug
+Diagnostics</h2>
+<div id="summary-7" class="section level3">
+<h3>Summary:</h3>
+<p>This step synthesizes the results of all previous stages into a
+structured diagnostic and reporting output. It compiles success rates,
+failure points, and per-step metrics into a final summary table.
+Additionally, debug data from multiple steps is harmonized and exported
+to facilitate transparency and reproducibility. The final report is
+saved and rendered in PDF format using R Markdown.</p>
+<p><strong>Inputs:</strong><br />
+- All intermediate data frames and debug outputs from steps 1 through 6,
+especially <code>step_1_domain_urls_robotsUrls_df</code>,
+<code>step_2_domain_Urls_robotsUrls_robotsContents_df</code>,
+<code>step_3_domain_urls_robotsUrls_robotsContents_sitemapUrlsLocal_df</code>,
+<code>step_4_1_missing_sitemaps_df</code>,
+<code>step_5_valid_sitemaps_check</code>, and
+<code>step_6_cleaned_df</code>.</p>
+<p><strong>Outputs:</strong><br />
+- A markdown-style report string (<code>step_7_report_content</code>)
+summarizing each processing stage. - A PDF report generated via
+<code>rmarkdown::render()</code>. - A debug CSV file
+<code>p1_debug_sitemap_data.csv</code> with harmonized entries from all
+error-producing stages.</p>
+<div id="function-step_7_generate_final_report" class="section level4">
+<h4>Function: <code>step_7_generate_final_report</code></h4>
+<p>This function constructs a comprehensive overview of the pipeline’s
+performance. It first assembles a summary table with counts of total,
+successful, and partially successful operations per step. It then
+defines and applies a helper function (<code>format_debug_df</code>) to
+standardize various debug data frames into a common schema. All debug
+logs are merged into one file for external inspection. Finally, a
+text-based R Markdown report is created and rendered to PDF, capturing
+high-level outcomes and domain-level sitemap availability statistics.
+This function ensures replicability, auditability, and interpretability
+of the scraping process.</p>
 <pre class="r"><code>step_7_generate_final_report &lt;- function() {
   # Create overall summary table
   step_7_overall_summary &lt;- data.frame(
@@ -1211,13 +1430,30 @@ step_7_generate_final_report()</code></pre>
 </div>
 </div>
 </div>
-<div id="step-8" class="section level1">
-<h1>Step 8:</h1>
-<div id="this-code-chunk-deletes-every-unnecessary-value-function-or-data.frame-in-the-environment." class="section level2">
-<h2>This code chunk deletes every unnecessary value, function or
-data.frame in the environment.</h2>
-<div id="this-code-runs-locally.-3" class="section level3">
-<h3>This code runs locally.</h3>
+<div id="code-chunk-step-8-environment-cleanup-and-memory-optimization" class="section level2">
+<h2>Code Chunk: Step 8 – Environment Cleanup and Memory
+Optimization</h2>
+<div id="summary-8" class="section level3">
+<h3>Summary:</h3>
+<p>This final step ensures that the R environment is cleared of all
+intermediate objects, functions, and temporary data structures that are
+no longer needed after the successful execution of the pipeline. This
+cleanup enhances reproducibility by isolating output artifacts and
+reduces memory usage for subsequent computations or session reuse.</p>
+<p><strong>Inputs:</strong><br />
+- No external data is required. The operation targets the internal R
+environment and variables generated in prior steps.</p>
+<p><strong>Outputs:</strong><br />
+- All temporary variables, helper functions, and debug frames related to
+steps 5–7 are deleted.<br />
+- Any remaining objects with names matching the pattern
+<code>^step_</code> are also purged via regular expression
+matching.<br />
+- The environment is left in a minimal, export-only state, preserving
+only final results and exported files.</p>
+<p>This operation is essential in replication-oriented workflows where
+deterministic output and minimal side effects are prerequisites for
+robustness and transparency.</p>
 <pre class="r"><code># Step 5 cleanup
 rm(step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents, 
    step_5_1_debug_unsuccsesful_fetches_df, step_5_get_sitemap_content_func, 

@@ -5,6 +5,23 @@ date: "2025-05-24"
 output: html_document
 ---
 
+# Overview: Sitemap Processing and URLSet Extraction Framework
+
+This document presents a comprehensive R-based framework for the automated retrieval, parsing, filtering, and categorization of sitemaps and associated URLSets from online news domains. The primary goal is to construct a clean, temporally constrained corpus of news article URLs for subsequent analysis. The underlying structure emphasizes modularity, traceability, and replicability, rendering it suitable for academic replication files.
+
+The system leverages a series of interconnected code chunks, each responsible for a distinct operational step. These range from the initialization of logging and data structures to the recursive processing of sitemap layers and the post-processing of scraped content. Throughout, the script implements robust error handling, retry logic, exclusion filtering, date-based heuristics, and output logging to ensure resilience and transparency.
+
+Inputs include a pre-cleaned CSV file listing base sitemap URLs, global date constraints, and filtering criteria. The outputs comprise a set of R data tables that document URLSet contents, processing status, logged errors, and retry metadata. The framework is designed to support iterative refinement, facilitating both full and partial reprocessing cycles in response to blockages or failed requests.
+
+
+## Code Chunk 1: Initial Setup and Library Loading
+
+### Summary:
+
+This code chunk initializes the R Markdown environment by configuring knitting options and loading all required libraries. It sets global options to suppress messages and warnings during knitting, ensuring cleaner output. Subsequently, it loads a comprehensive set of packages used for data manipulation (`tidyverse`, `data.table`), HTTP requests (`httr`), XML parsing (`xml2`), logging (`futile.logger`), and other utility functions. 
+
+It also programmatically creates two necessary directories: one for storing the output data and another for saving log files. These folders are conditionally created only if they do not already exist. This setup ensures that all subsequent chunks operate within a correctly initialized and reproducible environment.
+
 ```{r Step 1: Setup and load required packages}
 # knitting Options 
 knitr::opts_chunk$set(
@@ -42,7 +59,13 @@ cat("Step 1 completed: Packages loaded and output folder created.\n")
 
 ```
 
+## Code Chunk 2: Load Input CSV File
 
+### Summary:
+
+This code chunk loads the core input data required for the entire scraping workflow. Specifically, it reads a pre-cleaned CSV file containing base sitemap URLs using the `fread()` function from the `data.table` package. This method is optimized for fast reading of large tabular data, ensuring efficient initialization of the dataset.
+
+The resulting object, `step_2_input_dt`, serves as the foundational input table for subsequent sitemap processing steps. It contains information such as domain identifiers and first-level sitemap URLs. No transformations or filters are applied at this stage; the goal is to load the raw input as-is into memory.
 
 ```{r Step 2: Load Input CSV File}
 # Load the input CSV file into a data.table using fread
@@ -53,12 +76,22 @@ cat("Step 2 completed: Input CSV file loaded.\n")
 
 ```
 
+## Code Chunk 3: Set Global Parameters, Exclusions, and User Agents
 
+### Summary:
+
+This code chunk defines a set of global parameters that govern filtering and request behavior throughout the scraping process. First, it specifies the temporal boundaries (`global_date_start`, `global_date_end`) within which sitemaps and URLs are considered relevant. Second, it creates a vector of exclusion keywords (`global_excluded_strings`), which are used to eliminate URLs containing unwanted thematic elements such as images, videos, or sports content.
+
+In addition, the chunk retrieves the current VPN IP address for logging purposes. It also defines five user-agent profiles simulating different browser environments across operating systems, which are subsequently combined into a rotation list (`global_user_agent_list`). This rotation mechanism supports anonymity and helps mitigate the risk of request blocking during repeated access to remote servers.
 
 ```{r Step 3: Set Global Parameters, Exclusions, and User Agents}
 # Set global variables for the date range
 global_date_start <- as.Date("2025-01-01")
 global_date_end   <- as.Date("2025-02-23")
+
+# Set global variables for wayback validation later on
+global_wayback_date_start <- as.Date("2025-01-01")
+global_wayback_date_end   <- as.Date("2025-03-31")
 
 # Set global list of excluded strings (URLs containing these strings will be excluded)
 global_excluded_strings <- c(
@@ -91,7 +124,13 @@ cat("Step 3 completed: Global parameters, excluded lists, VPN IP, and user agent
 
 ```
 
+## Code Chunk 4: Create Global Data Tables for Error Logging, Retry Handling, and Master Rotation Tracking
 
+### Summary:
+
+This code chunk initializes two key global data structures required for tracking the scraping process and its failures. The first structure, `global_error_dt`, is a logging table that records all non-response-based errors occurring during sitemap processing. Each entry includes metadata such as domain and URL identifiers, error category, processing flags, and timestamps, enabling detailed post-hoc diagnostics and auditability.
+
+The second structure, `global_master_dt`, serves as a master registry for tracking the state and progress of each top-level sitemap URL. It records high-level indicators such as the number of requests made, scraping success, user agent ID, and the overall processing status. These tables do not take external inputs but are dynamically populated and updated throughout the execution of subsequent chunks. They serve as essential control and documentation mechanisms across the entire pipeline.
 
 ```{r Step 4: Create Global Data Tables for Error Logging, Retry Handling, and Master Rotation Tracking}
 # Create the global error data table for non-response-based sitemap processing errors
@@ -131,7 +170,21 @@ cat("Step 4 completed: Global error and master data tables created.\n")
 
 ```
 
+## Code Chunk 5: Defining Date-Check Helper Functions
 
+### Summary:
+
+This chunk introduces two central helper functions for date-based filtering, which is a core mechanism for selecting relevant sitemap entries. Both functions serve to determine whether either sitemap XML metadata or URL structures contain date information that falls within a predefined global range (`global_date_start` to `global_date_end`). These checks ensure that only temporally relevant content is included in downstream processing.
+
+The functions do not generate persistent outputs but return structured lists that guide decisions on exclusion or continuation. They are used extensively in the filtering, sorting, and scraping routines that follow, and are thus foundational to the system’s temporal logic.
+
+#### Function: `step_5_1_date_check_urlset_func`
+
+This function processes an XML document of type `<urlset>` and extracts all `<lastmod>` elements using a provided namespace map. It then converts these timestamp strings into R `Date` objects, filters invalid entries, and checks whether any date falls within the defined global range. If matching dates are found, it returns `"proceed"` with a reason `"in_range"` and the earliest valid date. Otherwise, it returns `"exclude"` or `"proceed"` with appropriate reasons based on the presence or absence of valid tags. This function operates directly on parsed XML structures and supports namespace-aware extraction.
+
+#### Function: `step_5_2_date_check_link_func`
+
+This function applies regular expressions to detect embedded date patterns within URL strings. It supports a wide range of date formats (e.g., `YYYY-MM-DD`, `DDMMYYYY`, `monthnameYYYY`), both compact and delimited, using localized and international month names. Upon detecting a valid pattern, it computes a derived date and checks whether it overlaps with the global date interval. It then returns a decision, a reason, and the matched pattern, along with computed start and end dates. The function is designed to handle noisy or underspecified URLs and is robust against malformed or ambiguous input.
 
 ```{r Step 5: Defining date-check helper functions:}
 # Function: step_5_1_date_check_urlset_func
@@ -352,6 +405,21 @@ cat("Step 5 completed: Date check functions defined.\n")
 
 ```
 
+## Code Chunk 6: Defining Sorting Functions
+
+### Summary:
+
+This code chunk introduces core sorting logic for sitemap sub-entries. The goal is to exclude irrelevant links, assign a meaningful order to those retained, and facilitate the processing of entries that lack temporal metadata. The process combines regular expression-based filtering with a pagination grouping heuristic. Two functions are defined: one for assigning pagination groups, and one for orchestrating the overall filtering and ordering.
+
+The function `step_6_sorting_func` takes as input a vector of URLs and multiple metadata parameters (e.g., identifiers, domain info, global exclusion criteria). Its output is a `data.table` annotated with filtering decisions, group membership, and sort indices, which is used to update the global progression tracking structure.
+
+### Function: `step_6_1_grouping_func`
+
+This helper function processes links that lack explicit date information and attempts to infer pagination groupings based on filename patterns. It extracts numeric suffixes from filenames and groups entries with shared prefixes. Only groups with five or more entries are retained. Group identifiers (`pagination_group`) and within-group order (`pagination_index`) are assigned accordingly. For each group member, the progression tracking table is updated via `step_7_1_progression_update`.
+
+### Function: `step_6_sorting_func`
+
+This is the main sorting routine. It applies exclusion filters based on known undesired substrings (`global_excluded_strings`) and date range evaluation using `step_5_2_date_check_link_func`. Remaining links are either kept, grouped by pagination logic, or sorted in default order. It handles multiple edge cases (e.g., links with no dates or partial information) and ensures each retained link receives a `sort_place` value. Additionally, it updates a global environment progression object, enabling traceability and stateful tracking across nested sitemap structures. The function returns a complete `data.table` capturing the filtering, grouping, and sorting status of each processed link.
 
 
 ```{r Step 6: Defining sorting functions:}
@@ -561,7 +629,29 @@ cat("Step 6 completed: Sorting function defined.\n")
 
 ```
 
+## Code Chunk 7: Defining Core Functions for Processing Sitemaps
 
+### Summary:
+
+This section defines the central orchestration functions responsible for managing the lifecycle of sitemap processing within the global scraping framework. The logic ensures consistent tracking, logging, classification, and storage of sitemap states. This includes dynamically updating metadata tables (`progression_dt`, `master_dt`, `response_log_dt`) and parsing valid XML structures for URL data extraction. The functions operate in a state-aware and fault-tolerant manner, integrating seamlessly into prior structures defined in previous chunks.
+
+Four functions are defined: a progression table updater, a master control updater, an HTTP response logger, and the actual URLSET parser. Together, they implement a robust control-flow regime capable of supporting complex sitemap hierarchies and pagination patterns under unreliable network conditions.
+
+#### Function: `step_7_1_progression_update`
+
+This function maintains and updates a per-sitemap `progression_dt`, which tracks all sub-URLs and their processing status. It inserts new rows or modifies existing entries, incorporating metadata such as sort position, pagination grouping, processing status, and timestamp. Additionally, it handles group-level logic for pagination heuristics—aborting further requests if multiple consecutive entries lie outside the desired date range. It also dissolves invalidated groups if higher-level sitemap structures (e.g. `sitemapindex`) are detected among them.
+
+#### Function: `step_7_2_master_dt_update_func`
+
+This function updates the global-level `master_dt`, reflecting the overall status of each `layer_1_url`. It incorporates information from `progression_dt`, `response_log_dt`, and `output_dt` to assess whether a sitemap is fully processed, partially failed, or still in progress. It also determines whether retry logic should be applied based on log history and request flags. Metrics such as total request count and user agent usage are maintained for auditability.
+
+#### Function: `step_7_3_response_log_update_func`
+
+This function creates and updates a `response_log_dt` for each sitemap, logging all non-200 HTTP responses. It classifies the error into categories (e.g. soft block, hard block), tracks the frequency of error types, and decides whether to escalate the situation (e.g. initiating retry behavior). Response metadata such as status codes, headers, and body snippets are recorded for post-hoc inspection. Additionally, the associated entry in the `progression_dt` is updated accordingly.
+
+#### Function: `step_7_4_urlset_scraper_func`
+
+This function parses XML responses of type `<urlset>`, extracts relevant `<loc>` and `<lastmod>` entries, and determines if the URLs fall within a pre-defined date range. If valid, the content is stored in a dedicated `output_dt`. The function includes logic for compressed XML files (`.gz`) and handles malformed XML via structured error logging. It also integrates pagination-aware logic, allowing the dynamic classification of groups as "before range" and aborting redundant requests. The function returns a summary of detected links, validity, and temporal span.
 
 ```{r Step 7: Defining core functions for processing sitemaps:}
 # The function step_7_1_progression_update  updates the progression data table for a sitemap.
@@ -1266,7 +1356,33 @@ cat("Step 7 completed: Progression_dt updater function, response_dt updater func
 
 ```
 
+## Code Chunk 8: Main Recursive Sitemap Processing Function with Logging
 
+### Summary:
+
+This code segment defines the primary recursive engine for sitemap processing. The function orchestrates sitemap traversal by dynamically managing HTTP requests, XML parsing, status logging, and conditional branching based on the content structure (`urlset`, `sitemapindex`, or unsupported types). The function integrates deeply with progression tracking and error logging mechanisms established in earlier steps. The core logic includes validation of pagination groups, conditional execution based on request limits and error thresholds, and stateful control over retry behavior and user-agent rotation.
+
+Inputs include metadata from the `global_master_dt` table and all relevant processing tables derived from the current `layer_1_url`. The function outputs updated state across `progression_dt`, `master_dt`, `response_log_dt`, and `output_dt`, as well as detailed print logs for progress tracking.
+
+#### Function: `step_8_recursive_processing_func`
+
+This is the central recursive function that governs the iterative processing of sitemap URLs. It performs the following:
+- Retrieves relevant metadata and initializes counters.
+- Validates candidate pagination groups by sampling child links and determining date regularity.
+- Iteratively processes links by priority (non-paginated first), applying a maximum request and error threshold.
+- For each URL, it executes an HTTP GET request and handles XML parsing, classifying results as valid `urlset`, `sitemapindex`, or unsupported.
+- Depending on the root tag, it calls specialized handlers: `step_7_4_urlset_scraper_func` for URLSETs or `step_6_sorting_func` for sitemap indexes.
+- It logs all non-200 responses, updates all global tracking tables, and prints iteration summaries.
+
+The function is both depth- and state-aware and ensures robust processing by integrating internal retry logic, error handling, and grouped pagination validation via `step_8_2_validate_pagination_group`. Upon completion or failure conditions, it finalizes the update cycle via `step_8_1_finish_func`.
+
+#### Function: `step_8_1_finish_func`
+
+This internal helper finalizes the processing cycle. It recalculates the `progression_dt` entry for the root URL and triggers a master update via `step_7_2_master_dt_update_func`. It also outputs summary statistics to the console: request counts, total processed entries, scraped URLSETs, and error statistics.
+
+#### Function: `step_8_2_validate_pagination_group`
+
+This validation subroutine samples three entries from a pagination group (first, middle, last) and examines their `<lastmod>` tags to assess temporal monotonicity. It flags the group as `"valid_up"`, `"valid_down"`, or `"invalid"` depending on the date trend. If any of the sample responses are not valid `urlset` XMLs, the group is dissolved.
 
 ```{r Step 8: Main recursive sitemap processing function with logging}
 
@@ -1731,7 +1847,25 @@ cat("Step 8 completed: Recursive sitemap processing function defined.\n")
 
 ```
 
+## Code Chunk 9: Defining the Master Loop
 
+### Summary:
+
+This code defines a global orchestration function that governs the lifecycle of sitemap processing. Acting as a high-level execution loop, it repeatedly invokes the recursive processing function on all pending sitemap entries, ensuring that every item in `global_master_dt` is either processed, retried, or definitively marked as failed. The loop incorporates status-based filtering and structured error handling to maintain process resilience and ensure full pipeline coverage.
+
+The input is the global data table `global_master_dt`, from which it identifies all entries not yet completed. The output is a fully updated state across all involved structures (`progression_dt`, `response_log_dt`, `output_dt`, and `global_master_dt`) once the loop terminates.
+
+#### Function: `step_9_master_loop_func`
+
+This function performs the following key operations:
+
+- Initializes an iteration counter and begins a `repeat` loop that terminates only when all input entries have reached a terminal state.
+- In each iteration, it identifies entries with a processing status not in the set `{"fully_processed", "partially_processed_and_moved_to_retry", "total_error"}`.
+- For each such index, it safely invokes the `step_8_recursive_processing_func` within a `tryCatch` block to prevent premature termination in case of error.
+- After processing, it logs summary statistics including counts for fully processed, partially failed, totally failed, and still-active entries.
+- When no entries remain pending, the loop exits and prints a final status report.
+
+This function ensures robustness by encapsulating lower-level processing logic in a controlled retry-capable master flow and is critical for executing the full scraping and logging cycle across multiple input domains.
 
 ```{r Step 9: Defining the Master Loop }
 # Define a master loop that processes all pending entries until completion
@@ -1790,7 +1924,41 @@ cat("Step 9 completed: Master loop defined. \n")
 
 ```
 
+## Code Chunk 10: Preparing the Input, Initializing Progression Structures
 
+### Summary:
+
+This section initializes the core input data structures and applies pre-processing logic to clean and structure input URLs before the recursive scraping begins. It performs both string-based and date-based exclusions, logs all filtered-out URLs, and then sets up individual tracking tables and metadata for each valid sitemap. This ensures that all subsequent steps operate on curated input with corresponding data environments already initialized.
+
+**Inputs:**  
+- `step_2_input_dt`: a data table of cleaned sitemap URLs.  
+- Global variables like `global_excluded_strings`, `global_date_start`, and `global_date_end`.
+
+**Outputs:**  
+- A cleaned input table (`step_10_clean_input_dt`) for sitemap processing.  
+- New progression, output, and response log tables in the global environment per sitemap.  
+- Updated entries in `global_master_dt`.  
+- Logged exclusion metadata in `global_error_dt`.
+
+### Functionality Details:
+
+1. **String-based Exclusion:**  
+   URLs matching any pattern in `global_excluded_strings` are filtered and logged with reason `"excluded_by_string"`.
+
+2. **Date-based Exclusion:**  
+   Remaining URLs are parsed using `step_5_2_date_check_link_func`, and any identified as `"out_of_range"` are logged as `"input_out_of_range"`.
+
+3. **Logging of Exclusions:**  
+   Both categories of excluded URLs are appended to `global_error_dt` with metadata including timestamps and exclusion reason.
+
+4. **Progression Initialization:**  
+   For each cleaned URL, empty `progression`, `output`, and `response_log` tables are created in `.GlobalEnv`. A root row is inserted into the progression table for each input.
+
+5. **Master Table Entry:**  
+   Each sitemap is added to `global_master_dt`, marking it as `"in_progress"` and initializing counters and status fields.
+
+6. **Cleanup:**  
+   All intermediate objects used during this step are explicitly removed from the environment to reduce clutter.
 
 ```{r Step 10: Preparing the Input, initializing progression structures}
 # Step 10: Preparing the Input, initializing progression structures
@@ -1943,7 +2111,33 @@ cat("Step 10 completed: individual progression, output and response tables initi
 
 ```
 
+## Code Chunk 11: Calling the Master Loop
 
+### Summary:
+
+This final chunk executes the main control logic by invoking the master loop (`step_9_master_loop_func`) while redirecting all console output to a persistent log file. This allows for continuous monitoring of the scraping process, including iteration counts, processing status updates, and potential error messages. The loop processes all pending sitemaps until completion, based on progression status.
+
+**Inputs:**  
+- The previously initialized `global_master_dt` and associated environment-specific progression/output/log tables.  
+- `step_1_logging_folder`: the directory for storing logs.
+
+**Outputs:**  
+- A text file `urlset_scraper_master_loop_log.txt` containing detailed logs of all iterations and statuses.  
+- Updated progression and master tracking for all processed sitemaps.
+
+### Functional Steps:
+
+1. **Log File Preparation:**  
+   Constructs a file path for a persistent log file within the logging directory.
+
+2. **Console Redirection:**  
+   Uses R's `sink()` function to redirect all subsequent output simultaneously to both the console and the log file for traceability.
+
+3. **Execution of Master Loop:**  
+   Calls the `step_9_master_loop_func()` which iteratively triggers the recursive sitemap processing for all valid entries.
+
+4. **Cleanup:**  
+   After loop execution, console redirection is terminated, and output behavior is reset to default.
 
 ```{r Step 11: Calling the Master Loop}
 # Open a log file in the output folder and redirect console output to it
@@ -1960,7 +2154,42 @@ sink()
 
 ```
 
+## Code Chunk 12: Wrangling and Saving Outputs, Generating Retry Progression Tables
 
+### Summary:
+
+This final processing step performs post-scraping wrangling and persistence operations. It systematically cleans and consolidates data, prepares structures for retry operations, and saves all relevant objects in `.rds` format. This ensures that failed or incomplete operations can be retried and that all progression information is archived for transparency and reproducibility.
+
+**Inputs:**  
+- All `*_progression_dt`, `*_response_log_dt`, and `*_output_dt` objects in the global environment.  
+- Global tracking objects: `global_master_dt`, `global_error_dt`.
+
+**Outputs:**  
+- Updated global error log (`global_error_dt`) including string-based exclusions.  
+- Retry structures: `retry_master_dt`, individual `*_retry_progression_dt` tables.  
+- `.rds` files for all major progression, output, and log tables saved in `step_1_output_folder`.
+
+### function: step_12_wrangle_and_save_func
+
+This function executes the complete post-processing logic in six stages:
+
+1. **Remove Sort Order:**  
+   All `sort_order` columns are removed from `*_progression_dt` tables to reduce object size before serialization.
+
+2. **Log String Exclusions:**  
+   Entries with `processing_status == "excluded_by_string"` are appended to `global_error_dt` as finalized errors.
+
+3. **Clean Empty Response Logs:**  
+   Response log tables without any entries are deleted to reduce redundancy.
+
+4. **Generate Retry Master Table:**  
+   A filtered copy of `global_master_dt` is created containing only partially processed sitemaps. Status flags and counters are reset to enable retry.
+
+5. **Construct Retry Progression Tables:**  
+   For each sitemap eligible for retry, a new progression table is assembled from logged error responses (`retry_flag == TRUE`), including metadata such as status codes and response body snippets.
+
+6. **Serialize All Objects:**  
+   All relevant objects—including progression, output, response, and retry tables—are saved as `.rds` files within the specified output directory for later reuse.
 
 ```{r Step 12: Wrangling and saving outputs, generating retry_progression_dts}
 # Step 12: Wrangle Outputs and Save
