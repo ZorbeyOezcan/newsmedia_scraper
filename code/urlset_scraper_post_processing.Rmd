@@ -1,0 +1,308 @@
+---
+title: "urlset_scraper_post_processing"
+author: "Zorbey Özcan"
+date: "2025-05-26"
+output: html_document
+---
+
+```{r}
+# Set knitting options for clean output
+knitr::opts_chunk$set(
+  echo    = TRUE,    # show code
+  message = FALSE,   # suppress messages
+  warning = FALSE    # suppress warnings
+)
+
+# Load core libraries for data processing, HTTP requests, XML parsing and logging
+library(tidyverse)
+library(data.table)
+library(xml2)
+library(httr)
+library(stringr)
+library(purrr)
+library(futile.logger)
+library(lubridate)
+
+
+```
+
+
+```{r}
+# Define folder containing .rds files for retry processing
+step_2_input_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
+
+# Enumerate all .rds files in the input folder
+step_2_input_files <- list.files(
+  path      = step_2_input_folder,
+  pattern   = "\\.rds$",
+  full.names = TRUE
+)
+
+# Build a table of file paths and corresponding object names
+step_2_input_files_df <- data.table(
+  file_path   = step_2_input_files,
+  object_name = basename(step_2_input_files) %>% str_remove("\\.rds$")
+)
+
+# Load each .rds file into the global environment under its original object name
+for (i in seq_len(nrow(step_2_input_files_df))) {
+  fp  <- step_2_input_files_df$file_path[i]
+  nm  <- step_2_input_files_df$object_name[i]
+  obj <- readRDS(fp)
+  assign(nm, obj, envir = .GlobalEnv)
+}
+```
+
+
+
+```{r}
+# Retrieve the current external IP address for retry operations
+global_vpn_ip_retry <- trimws(suppressWarnings(readLines("https://ifconfig.me/ip")))
+
+# Compare the retry IP with the original IP and issue a warning if they match
+if (exists("global_vpn_ip") && identical(global_vpn_ip_retry, global_vpn_ip)) {
+  warning("Change VPN before proceeding.")
+}
+
+# Define new user-agent strings for retry request rotation
+step_3_user_agent_1 <- "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6378.0 Safari/537.36"
+step_3_user_agent_2 <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
+step_3_user_agent_3 <- "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+step_3_user_agent_4 <- "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+step_3_user_agent_5 <- "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
+
+# Assemble the retry-specific user-agent rotation list
+global_user_agent_list_retry <- c(
+  step_3_user_agent_1,
+  step_3_user_agent_2,
+  step_3_user_agent_3,
+  step_3_user_agent_4,
+  step_3_user_agent_5
+)
+```
+
+
+
+```{r}
+# For each entry in the retry master table, create an empty retry response log
+if (exists("global_retry_master_dt", envir = .GlobalEnv)) {
+  for (i in seq_len(nrow(global_retry_master_dt))) {
+    # Identify the sitemap layer ID
+    step_5_layer_id <- global_retry_master_dt$layer_1_url_id[i]
+    
+    # Construct original and retry log table names
+    step_5_orig_log_name  <- paste0("sitemap_id_", step_5_layer_id, "_response_log_dt")
+    step_5_retry_log_name <- paste0("sitemap_id_", step_5_layer_id, "_retry_response_log_dt")
+    
+    # If the original response log exists, derive its schema
+    if (exists(step_5_orig_log_name, envir = .GlobalEnv)) {
+      step_5_orig_log_df  <- get(step_5_orig_log_name, envir = .GlobalEnv)
+      # Initialize zero-row copy for retry logs
+      step_5_retry_log_df <- step_5_orig_log_df[0]
+      # Assign the empty retry log table
+      assign(step_5_retry_log_name, step_5_retry_log_df, envir = .GlobalEnv)
+    }
+  }
+}
+```
+
+
+
+```{r}
+# Backup original master and user-agent list
+step_6_master_backup       <- global_master_dt
+step_6_user_agents_backup  <- global_user_agent_list
+
+# Replace master table and UA list for retry processing
+global_master_dt         <- global_retry_master_dt
+global_user_agent_list   <- global_user_agent_list_retry
+
+# Define log file path for retry iteration
+step_6_log_filepath <- file.path(
+  "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output",
+  "urlset_scraper_retry_loop_log.txt"
+)
+
+# Redirect output to both console and log file
+sink(step_6_log_filepath, append = TRUE, split = TRUE)
+
+# Invoke the master loop on the retry master table
+step_9_master_loop_func()
+
+# Stop the sink and restore normal output
+sink()
+
+# Restore original master table and user-agent list
+global_master_dt         <- step_6_master_backup
+global_user_agent_list   <- step_6_user_agents_backup
+```
+
+
+
+```{r}
+# Initialize comparison results table
+step_7_comparison_df <- data.table(
+  domain_id               = integer(),
+  domain_url              = character(),
+  layer_1_url_id          = integer(),
+  layer_1_url             = character(),
+  links_with_error_before = integer(),
+  links_with_error_after  = integer(),
+  links_with_same_error   = integer(),
+  processed_links         = integer()
+)
+
+# Iterate over each sitemap in the retry master
+for (i in seq_len(nrow(global_retry_master_dt))) {
+  # Extract identifiers
+  step_7_layer_id  <- global_retry_master_dt$layer_1_url_id[i]
+  step_7_domain_id <- global_retry_master_dt$domain_id[i]
+  step_7_domain_url<- global_retry_master_dt$domain_url[i]
+  step_7_layer_url <- global_retry_master_dt$layer_1_url[i]
+  
+  # Original and retry log names
+  step_7_orig_log_name  <- paste0("sitemap_id_", step_7_layer_id, "_response_log_dt")
+  step_7_retry_log_name <- paste0("sitemap_id_", step_7_layer_id, "_retry_response_log_dt")
+  
+  # Skip if retry log does not exist
+  if (!exists(step_7_orig_log_name, envir = .GlobalEnv) ||
+      !exists(step_7_retry_log_name, envir = .GlobalEnv)) {
+    next
+  }
+  
+  # Load logs
+  step_7_orig_log_dt  <- get(step_7_orig_log_name, envir = .GlobalEnv)
+  step_7_retry_log_dt <- get(step_7_retry_log_name, envir = .GlobalEnv)
+  
+  # Count links with retry_flag == TRUE
+  step_7_links_with_error_before <- nrow(step_7_orig_log_dt[retry_flag == TRUE])
+  step_7_links_with_error_after  <- nrow(step_7_retry_log_dt[retry_flag == TRUE])
+  
+  # Count same errors: join on requested_url, status code and message
+  step_7_merged_dt <- merge(
+    step_7_orig_log_dt[retry_flag == TRUE, .(requested_url, http_status_code, http_status_message)],
+    step_7_retry_log_dt[retry_flag == TRUE, .(requested_url, http_status_code, http_status_message)],
+    by = c("requested_url", "http_status_code", "http_status_message")
+  )
+  step_7_links_with_same_error <- nrow(unique(step_7_merged_dt))
+  
+  # Calculate processed links difference
+  step_7_processed_links <- step_7_links_with_error_before - step_7_links_with_error_after
+  
+  # Append to comparison table
+  step_7_comparison_df <- rbind(
+    step_7_comparison_df,
+    data.table(
+      domain_id               = step_7_domain_id,
+      domain_url              = step_7_domain_url,
+      layer_1_url_id          = step_7_layer_id,
+      layer_1_url             = step_7_layer_url,
+      links_with_error_before = step_7_links_with_error_before,
+      links_with_error_after  = step_7_links_with_error_after,
+      links_with_same_error   = step_7_links_with_same_error,
+      processed_links         = step_7_processed_links
+    ),
+    fill = TRUE
+  )
+}
+```
+
+
+
+```{r}
+
+# Initialize an empty table for all extracted links and dates
+step_8_results_dt_all_links <- data.table(
+  domain_id        = integer(),
+  domain_url       = character(),
+  layer_1_url_id   = integer(),
+  layer_1_url      = character(),
+  urlset_url       = character(),
+  result_link      = character(),
+  date             = as.Date(character())
+)
+
+# Identify all output data tables in the environment
+step_8_output_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_output_dt$")
+
+# Iterate over each output table to extract <loc> and <lastmod> entries
+for (nm in step_8_output_names) {
+  step_8_out_dt <- get(nm, envir = .GlobalEnv)
+  
+  # Loop through each record in the output table
+  for (i in seq_len(nrow(step_8_out_dt))) {
+    step_8_xml_raw <- step_8_out_dt$urlset_content[i]
+    # Skip empty or missing content
+    if (is.na(step_8_xml_raw) || !nzchar(step_8_xml_raw)) next
+    
+    # Parse XML document
+    step_8_doc <- tryCatch(read_xml(step_8_xml_raw), error = function(e) NULL)
+    if (is.null(step_8_doc)) next
+    
+    # Rename default namespace to 'ns'
+    step_8_ns <- xml_ns_rename(xml_ns(step_8_doc), d1 = "ns")
+    # Extract all <loc> and <lastmod> elements
+    step_8_loc_nodes     <- xml_find_all(step_8_doc, ".//ns:loc", ns = step_8_ns)
+    step_8_lastmod_nodes <- xml_find_all(step_8_doc, ".//ns:lastmod", ns = step_8_ns)
+    
+    # Convert node sets to character vectors
+    step_8_links    <- xml_text(step_8_loc_nodes)
+    step_8_mods_raw <- xml_text(step_8_lastmod_nodes)
+    
+    # Clean and parse dates from <lastmod>
+    step_8_mods_clean <- gsub("T.*", "", step_8_mods_raw)
+    step_8_mods_clean[!str_detect(step_8_mods_clean, "^\\d{4}-\\d{2}-\\d{2}$")] <- NA_character_
+    step_8_mods_final <- as.Date(step_8_mods_clean, format = "%Y-%m-%d")
+    
+    # Ensure length alignment between links and dates
+    step_8_mods_final <- rep(step_8_mods_final, length.out = length(step_8_links))
+    
+    # Keep only http/https links
+    step_8_keep_idx <- which(str_detect(step_8_links, "^https?://"))
+    if (length(step_8_keep_idx) == 0L) next
+    
+    # Assemble a temporary data.table for this urlset
+    step_8_tmp_dt <- data.table(
+      domain_id        = step_8_out_dt$domain_id[i],
+      domain_url       = step_8_out_dt$domain_url[i],
+      layer_1_url_id   = step_8_out_dt$layer_1_url_id[i],
+      layer_1_url      = step_8_out_dt$layer_1_url[i],
+      urlset_url       = step_8_out_dt$urlset_url[i],
+      result_link      = step_8_links[step_8_keep_idx],
+      date             = step_8_mods_final[step_8_keep_idx]
+    )
+    
+    # Append to the master results table
+    step_8_results_dt_all_links <- rbind(
+      step_8_results_dt_all_links,
+      step_8_tmp_dt,
+      fill = TRUE
+    )
+  }
+}
+
+```
+
+
+```{r}
+# Define output directory for final datasets
+step_9_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/dataset"
+
+# Create directory if it does not exist
+if (!dir.exists(step_9_output_folder)) {
+  dir.create(step_9_output_folder, recursive = TRUE)
+}
+
+# Save the cleaned results table
+saveRDS(
+  step_8_results_dt_all_links_clean,
+  file = file.path(step_9_output_folder, "results_dt_all_links_clean.rds")
+)
+
+# Save the comparison results table
+saveRDS(
+  step_7_comparison_df,
+  file = file.path(step_9_output_folder, "response_log_comparison.rds")
+)
+
+```

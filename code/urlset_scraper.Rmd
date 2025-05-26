@@ -1912,6 +1912,12 @@ step_9_master_loop_func <- function() {
     message(step_9_progress_count,  " entries still being processed")
   }
   
+  # Compute counts of each status
+  step_9_fully_count     <- sum(global_master_dt$input_processing_status == "fully_processed")
+  step_9_partial_count  <- sum(global_master_dt$input_processing_status == "partially_processed_and_moved_to_retry")
+  step_9_total_count    <- sum(global_master_dt$input_processing_status == "total_error")
+  step_9_progress_count <- sum(global_master_dt$input_processing_status == "in_progress")
+  
   # Final summary when loop ends
   message("Master loop ends after ", step_9_iter_count, " iterations.")
   message(step_9_fully_count,    " entries fully processed")
@@ -2492,49 +2498,31 @@ step_9_master_loop_func()
 sink()
 
 ```
-
-## Code Chunk 15: Wrangling and Saving Outputs, Generating Retry Progression Tables
+## Code Chunk 15: Wrangling and Saving Outputs, Building Retry Progression Tables
 
 ### Summary:
+This final post-processing step consolidates the results of the scraping pipeline, cleans auxiliary metadata, constructs retry structures with the same schema as the primary progression tables, and persists all relevant data as `.rds` files. It removes transient fields, logs string-based exclusions into the global error table, discards empty response logs, and prepares both a master retry index and per-sitemap retry progression tables populated with default progression entries. These actions ensure reproducibility, enable systematic retries of failed requests, and archive the complete state of the workflow.
 
-This final processing step performs post-scraping wrangling and persistence operations. It systematically cleans and consolidates data, prepares structures for retry operations, and saves all relevant objects in `.rds` format. This ensures that failed or incomplete operations can be retried and that all progression information is archived for transparency and reproducibility.
+#### Inputs:
+- All `sitemap_id_<n>_progression_dt`, `sitemap_id_<n>_response_log_dt`, and `sitemap_id_<n>_output_dt` objects in the global environment.
+- Global objects: `global_master_dt`, `global_error_dt`.
 
-**Inputs:**  
-- All `*_progression_dt`, `*_response_log_dt`, and `*_output_dt` objects in the global environment.  
-- Global tracking objects: `global_master_dt`, `global_error_dt`.
+#### Outputs:
+- Updated `global_error_dt` including any new string-exclusion records.
+- A `global_retry_master_dt` data table containing only those sitemaps flagged for retry.
+- Per-sitemap `sitemap_id_<n>_retry_progression_dt` tables, each mirroring the column schema of its corresponding progression table and containing default, unprocessed entries for every retry‐flagged URL.
+- Serialized `.rds` files for all progression, output, response, and retry tables written to the specified output directory.
 
-**Outputs:**  
-- Updated global error log (`global_error_dt`) including string-based exclusions.  
-- Retry structures: `global_retry_master_dt`, individual `*_retry_progression_dt` tables.  
-- `.rds` files for all major progression, output, and log tables saved in `step_1_output_folder`.
-
-### function: step_15_wrangle_and_save_func
-
-This function executes the complete post-processing logic in six stages:
-
-1. **Remove Sort Order:**  
-   All `sort_order` columns are removed from `*_progression_dt` tables to reduce object size before serialization.
-
-2. **Log String Exclusions:**  
-   Entries with `processing_status == "excluded_by_string"` are appended to `global_error_dt` as finalized errors.
-
-3. **Clean Empty Response Logs:**  
-   Response log tables without any entries are deleted to reduce redundancy.
-
-4. **Generate Retry Master Table:**  
-   A filtered copy of `global_master_dt` is created containing only partially processed sitemaps. Status flags and counters are reset to enable retry.
-
-5. **Construct Retry Progression Tables:**  
-   For each sitemap eligible for retry, a new progression table is assembled from logged error responses (`retry_flag == TRUE`), including metadata such as status codes and response body snippets.
-
-6. **Serialize All Objects:**  
-   All relevant objects—including progression, output, response, and retry tables—are saved as `.rds` files within the specified output directory for later reuse.
-
+### Function: step_15_wrangle_and_save_func
+The `step_15_wrangle_and_save_func` encapsulates six discrete operations:
+1. **Remove Sort Order Columns:** Iterates through every progression table and deletes the `sort_order` column to streamline the objects before saving.
+2. **Log String Exclusions:** Scans each progression table for entries with `processing_status == "excluded_by_string"`, formats them as error records, and appends them to `global_error_dt`.
+3. **Clean Empty Response Logs:** Identifies and removes any `sitemap_id_<n>_response_log_dt` tables that contain zero rows, reducing clutter.
+4. **Construct Retry Master Table:** Filters `global_master_dt` for entries marked `partially_processed_and_moved_to_retry`, resets their status and counters, and stores the result in `global_retry_master_dt`.
+5. **Build Retry Progression Tables:** For each sitemap in `global_retry_master_dt`, selects all response-log entries where `retry_flag == TRUE`, then creates a new `sitemap_id_<n>_retry_progression_dt` table using the exact same column set as the original progression table, inserting one default row per failed URL with `processing_status = "in_progress"`.
+6. **Serialize All Objects:** Gathers all progression, output, response, and retry table names into a list and writes each to disk as an `.rds` file under the designated output folder, ensuring complete archival of the scraping process state.
 
 ```{r Step 15: Wrangling and saving outputs, generating retry_progression_dts}
-# Step 15: Wrangle Outputs and Save
-# This chunk removes the "sort_order" column, collects excluded-by-string errors,
-# cleans empty logs, builds retry tables, and saves all relevant objects.
 step_15_wrangle_and_save_func <- function() {
   # 1. Remove "sort_order" from all progression tables
   prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
@@ -2595,58 +2583,23 @@ step_15_wrangle_and_save_func <- function() {
     )]
   }
 
-  # 5. Create retry progression tables
+  # 5. Create retry progression tables with same columns as normal progression
   for (i in seq_len(nrow(global_retry_master_dt))) {
-    lid    <- global_retry_master_dt$layer_1_url_id[i]
-    resp_nm <- paste0("sitemap_id_", lid, "_response_log_dt")
+    lid       <- global_retry_master_dt$layer_1_url_id[i]
+    resp_nm   <- paste0("sitemap_id_", lid, "_response_log_dt")
     if (!exists(resp_nm, envir = .GlobalEnv)) next
-    resp_dt <- get(resp_nm, envir = .GlobalEnv)[retry_flag == TRUE]
+    resp_dt   <- get(resp_nm, envir = .GlobalEnv)[retry_flag == TRUE]
     if (nrow(resp_dt) == 0L) next
 
-    retry_prog_nm <- paste0("sitemap_id_", lid, "_retry_progression_dt")
-    cols <- c(
-      "domain_id","domain_url","layer_1_url_id","layer_1_url",
-      "current_url_id","current_url","parent_url_id","processed",
-      "processing_status","sorted","sort_place","in_range",
-      "root_tag","subsitemap_status","subsitemap_progress",
-      "pagination_group","pagination_index","pagination_group_status",
-      "timestamp",
-      "http_status_code","http_status_message",
-      "response_header_snippet","response_body_snippet",
-      "response_category","action_taken"
-    )
-    
-    out_dt <- data.table(
-      domain_id = integer(),
-      domain_url = character(),
-      layer_1_url_id = integer(),
-      layer_1_url = character(),
-      current_url_id = integer(),
-      current_url = character(),
-      parent_url_id = integer(),
-      processed = logical(),
-      processing_status = character(),
-      sorted = character(),
-      sort_place = integer(),
-      in_range = character(),
-      root_tag = character(),
-      subsitemap_status = character(),
-      subsitemap_progress = character(),
-      pagination_group = character(),
-      pagination_index = integer(),
-      pagination_group_status = character(),
-      timestamp = as.POSIXct(character()),
-      http_status_code = integer(),
-      http_status_message = character(),
-      response_header_snippet = character(),
-      response_body_snippet = character(),
-      response_category = character(),
-      action_taken = character()
-    )
-    
+    # Use an empty template of the normal progression table
+    prog_nm         <- paste0("sitemap_id_", lid, "_progression_dt")
+    retry_prog_nm   <- paste0("sitemap_id_", lid, "_retry_progression_dt")
+    template_retry  <- get(prog_nm, envir = .GlobalEnv)[0]
+
+    # For each response entry, create a default progression row
     for (j in seq_len(nrow(resp_dt))) {
       r <- resp_dt[j]
-      row <- data.table(
+      new_row <- data.table(
         domain_id               = r$Domain_id,
         domain_url              = r$Domain_url,
         layer_1_url_id          = r$Layer_1_url_id,
@@ -2665,17 +2618,13 @@ step_15_wrangle_and_save_func <- function() {
         pagination_group        = NA_character_,
         pagination_index        = NA_integer_,
         pagination_group_status = NA_character_,
-        timestamp               = r$timestamp,
-        http_status_code        = r$http_status_code,
-        http_status_message     = r$http_status_message,
-        response_header_snippet = r$response_header_snippet,
-        response_body_snippet   = r$response_body_snippet,
-        response_category       = r$response_category,
-        action_taken            = r$action_taken
+        timestamp               = Sys.time()
       )
-      out_dt <- rbind(out_dt, row, fill = TRUE)
+      template_retry <- rbind(template_retry, new_row, fill = TRUE)
     }
-    assign(retry_prog_nm, out_dt, envir = .GlobalEnv)
+
+    # Assign the retry progression table to the global environment
+    assign(retry_prog_nm, template_retry, envir = .GlobalEnv)
   }
 
   # 6. Save all objects as .rds
@@ -2695,7 +2644,7 @@ step_15_wrangle_and_save_func <- function() {
 step_15_wrangle_and_save_func()
 
 
-cat("Step 15 completed: All date cleaned and saved.\n")
+cat("Step 15 completed: All data cleaned and saved.\n")
 
 ```
 
