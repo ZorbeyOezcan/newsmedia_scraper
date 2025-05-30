@@ -2160,7 +2160,7 @@ sink(step_11_log_filepath, append = TRUE, split = TRUE)
 step_9_master_loop_func()
 
 # Stop sinking and restore normal console output
-sink()
+if (sink.number() > 0) sink()
 
 
 cat("Step 11 completed: Master Loop called for teh first time.\n")
@@ -2186,17 +2186,50 @@ sink(step_12_log_filepath, append = TRUE, split = TRUE)
 
 # Define helper to fetch all snapshot timestamps from Wayback CDX API
 step_12_get_snapshots_func <- function(url) {
-  res <- httr::GET(
+  # Attempt HTTP request with timeout and basic error catching
+  res <- try(httr::GET(
     "http://web.archive.org/cdx/search/cdx",
-    query = list(url = url, output = "json", fl = "timestamp")
-  )
+    query = list(url = url, output = "json", fl = "timestamp"),
+    httr::timeout(30)
+  ), silent = TRUE)
+
+  # Catch connection-level errors (e.g. DNS failure, no response)
+  if (inherits(res, "try-error")) {
+    cat(sprintf("CDX API request failed for URL (connection error): %s\n", url))
+    return(character(0))
+  }
+
+  # Handle rate limiting explicitly
   if (httr::status_code(res) == 429) {
     cat(sprintf("CDX API: 429 Rate Limit reached for URL: %s\n", url))
     return(character(0))
   }
-  httr::stop_for_status(res)
-  entries <- jsonlite::fromJSON(httr::content(res, as = "text", encoding = "UTF-8"))
-  unlist(entries[-1])  # drop header row and return timestamps
+
+  # Handle other HTTP errors (e.g. 500, 404, 403)
+  if (httr::status_code(res) >= 400) {
+    cat(sprintf("CDX API returned HTTP error %s for URL: %s\n",
+                httr::status_code(res), url))
+    return(character(0))
+  }
+
+  # Read the response content
+  content_text <- httr::content(res, as = "text", encoding = "UTF-8")
+
+  # Handle empty response bodies
+  if (nchar(content_text) == 0) {
+    cat(sprintf("CDX API returned empty response body for URL: %s\n", url))
+    return(character(0))
+  }
+
+  # Parse JSON safely
+  entries <- try(jsonlite::fromJSON(content_text), silent = TRUE)
+  if (inherits(entries, "try-error") || length(entries) <= 1) {
+    cat(sprintf("CDX API returned invalid or no data for URL: %s\n", url))
+    return(character(0))
+  }
+
+  # Return list of timestamps (skip header row)
+  return(unlist(entries[-1]))
 }
 
 # Collect all sitemapindex entries across progression tables
@@ -2235,16 +2268,20 @@ for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
   assign(wayback_name, data.table::copy(template_dt), envir = .GlobalEnv)
 
   for (i in seq_len(nrow(subset_dt))) {
-    row <- subset_dt[i]
+  row <- subset_dt[i]
+
+  tryCatch({
     cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
     timestamps <- step_12_get_snapshots_func(row$current_url)
     Sys.sleep(4)  # pause required by CDX-API
+
     dates <- lubridate::ymd(substr(timestamps, 1, 8))
     sel_idx <- which(dates >= global_wayback_date_start & dates <= global_wayback_date_end)
     cat(sprintf("Snapshots in selected range: %d\n", length(sel_idx)))
 
     if (length(sel_idx) > 0L) {
       snapshot_found <- TRUE
+
       for (j in sel_idx) {
         ts <- timestamps[j]
         raw_url <- sprintf("http://web.archive.org/web/%sid_/%s", ts, row$current_url)
@@ -2255,15 +2292,31 @@ for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
           next
         }
 
-        xml_text <- httr::content(resp, as = "text", encoding = "UTF-8")
-        doc <- xml2::read_xml(xml_text)
-        ns_map <- xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns")
+        xml_text <- try(httr::content(resp, as = "text", encoding = "UTF-8"), silent = TRUE)
+        if (inherits(xml_text, "try-error") || nchar(xml_text) == 0) {
+          cat(sprintf("Empty or invalid XML content at snapshot URL: %s – skipping\n", raw_url))
+          next
+        }
+
+        doc <- try(xml2::read_xml(xml_text), silent = TRUE)
+        if (inherits(doc, "try-error")) {
+          cat(sprintf("Failed to parse XML at: %s – skipping\n", raw_url))
+          next
+        }
+
+        ns_map <- try(xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns"), silent = TRUE)
+        if (inherits(ns_map, "try-error")) {
+          cat(sprintf("Namespace parsing failed at: %s – skipping\n", raw_url))
+          next
+        }
+
         loc_nodes <- xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map)
         links <- xml2::xml_text(loc_nodes)
 
         if (length(links) > 0L) {
           existing_dt <- get(prog_name, envir = .GlobalEnv)
           next_id <- max(existing_dt$current_url_id, na.rm = TRUE) + 1L
+
           new_rows <- lapply(seq_along(links), function(k) {
             data.table::data.table(
               domain_id = row$domain_id,
@@ -2328,26 +2381,31 @@ for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
         }
       }
     }
-  }
+  }, error = function(e) {
+    # Log any unhandled error within this iteration
+    cat(sprintf("Unhandled error in processing snapshots for URL: %s\nMessage: %s\n",
+                row$current_url, conditionMessage(e)))
+  })
+}
 
-  # Record summary info per layer_1_url_id
-  step_12_overview_dt <- rbind(
-    step_12_overview_dt,
-    data.table::data.table(
-      layer_1_url_id = lid,
-      layer_1_url = subset_dt$layer_1_url[1],
-      wayback_snapshot = snapshot_found,
-      added_wayback_entries = total_new
-    ),
-    fill = TRUE
-  )
+# Record summary info per layer_1_url_id
+step_12_overview_dt <- rbind(
+  step_12_overview_dt,
+  data.table::data.table(
+    layer_1_url_id = lid,
+    layer_1_url = subset_dt$layer_1_url[1],
+    wayback_snapshot = snapshot_found,
+    added_wayback_entries = total_new
+  ),
+  fill = TRUE
+)
 
-  # Remove temp wayback dt if snapshot was found
-  if (snapshot_found) rm(list = wayback_name, envir = .GlobalEnv)
+# Remove temp wayback dt if snapshot was found
+if (snapshot_found) rm(list = wayback_name, envir = .GlobalEnv)
 }
 
 # Stop sinking and restore normal console output
-sink()
+if (sink.number() > 0) sink()
 
 
 cat("Step 12 completed: Indexsitemaps revalidated.\n")
@@ -2378,9 +2436,6 @@ step_13_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_wayback
 
 # Start sinking both to file and console
 sink(step_13_log_filepath, append = TRUE, split = TRUE)
-
-# Stop sinking and restore normal console output
-sink()
 
 # Load all progression tables and extract URLSET entries that were out-of-range
 prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
@@ -2417,8 +2472,9 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
   total_new <- 0L
 
   for (i in seq_len(nrow(subset_dt))) {
-    row <- subset_dt[i]
+  row <- subset_dt[i]
 
+  tryCatch({
     cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
     timestamps <- step_12_get_snapshots_func(row$current_url)
     dates <- lubridate::ymd(substr(timestamps, 1, 8))
@@ -2439,15 +2495,28 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
           next
         }
 
+        # Try parsing response text
+        xml_text <- try(httr::content(resp, as = "text", encoding = "UTF-8"), silent = TRUE)
+        if (inherits(xml_text, "try-error") || nchar(xml_text) == 0) {
+          cat(sprintf("Empty or invalid XML content at snapshot URL: %s – skipping\n", wayback_url))
+          next
+        }
+
+        # Try reading XML
+        doc <- try(xml2::read_xml(xml_text), silent = TRUE)
+        if (inherits(doc, "try-error")) {
+          cat(sprintf("Failed to parse XML at: %s – skipping\n", wayback_url))
+          next
+        }
+
         out_nm <- paste0("sitemap_id_", lid, "_output_dt")
         out_dt <- get(out_nm, envir = .GlobalEnv)
 
         if (!wayback_url %in% out_dt$urlset_url) {
-          # Report valid snapshot URL
           cat(sprintf("Valid snapshot found in range: %s\n", wayback_url))
 
           # Process with step_7_4 function
-          res <- step_7_4_urlset_scraper_func(
+          res <- try(step_7_4_urlset_scraper_func(
             url               = wayback_url,
             http_response     = resp,
             xml_doc           = NULL,
@@ -2459,13 +2528,14 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
             layer_1_url       = row$layer_1_url,
             current_url_id    = row$current_url_id,
             parent_url_id     = row$parent_url_id
-          )
+          ), silent = TRUE)
 
-          if (!is.null(res) && isTRUE(res$in_range)) {
+          if (!inherits(res, "try-error") && !is.null(res) && isTRUE(res$in_range)) {
             total_new <- total_new + 1L
           }
         }
 
+        # Always update master after attempt
         step_7_2_master_dt_update_func(
           domain_id             = row$domain_id,
           domain_url            = row$domain_url,
@@ -2476,7 +2546,11 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
         )
       }
     }
-  }
+  }, error = function(e) {
+    cat(sprintf("Unhandled error in processing snapshots for URL: %s\nMessage: %s\n",
+                row$current_url, conditionMessage(e)))
+  })
+}
 
   step_13_overview_dt <- rbind(
     step_13_overview_dt,
@@ -2491,7 +2565,7 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
 }
 
 # Stop sinking and restore normal console output
-sink()
+if (sink.number() > 0) sink()
 
 
 cat("Step 13 completed: Urlsets out of range revalidated.\n")
@@ -2523,7 +2597,7 @@ sink(step_14_log_filepath, append = TRUE, split = TRUE)
 step_9_master_loop_func()
 
 # Stop redirecting and restore normal console output
-sink()
+if (sink.number() > 0) sink()
 
 
 cat("Step 14 completed: Master Loop called for the second time.\n")
