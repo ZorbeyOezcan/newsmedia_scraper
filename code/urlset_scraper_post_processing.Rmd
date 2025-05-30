@@ -5,7 +5,7 @@ date: "2025-05-26"
 output: html_document
 ---
 
-```{r}
+```{r Step 1: Setup and load required packages}
 # Set knitting options for clean output
 knitr::opts_chunk$set(
   echo    = TRUE,    # show code
@@ -22,12 +22,20 @@ library(stringr)
 library(purrr)
 library(futile.logger)
 library(lubridate)
+library(ggplot2)
+library(viridis)
+library(grid)
+library(cowplot)
 
+step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
+step_1_logging_folder <- "/Users/zorbeyozcan/newsmedia_scraper/documentation"
+
+cat("Step 1 completed: Packages loaded, outputfolder defined.\n")
 
 ```
 
 
-```{r}
+```{r Step 2: Reading the input}
 # Define folder containing .rds files for retry processing
 step_2_input_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
 
@@ -51,11 +59,15 @@ for (i in seq_len(nrow(step_2_input_files_df))) {
   obj <- readRDS(fp)
   assign(nm, obj, envir = .GlobalEnv)
 }
+
+
+cat("Step 2 completed: Inputs loaded.\n")
+
 ```
 
 
 
-```{r}
+```{r Step 3: Set VPN and User Agents}
 # Retrieve the current external IP address for retry operations
 global_vpn_ip_retry <- trimws(suppressWarnings(readLines("https://ifconfig.me/ip")))
 
@@ -66,9 +78,13 @@ if (exists("global_vpn_ip") && identical(global_vpn_ip_retry, global_vpn_ip)) {
 
 # Define new user-agent strings for retry request rotation
 step_3_user_agent_1 <- "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6378.0 Safari/537.36"
+
 step_3_user_agent_2 <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
+
 step_3_user_agent_3 <- "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+
 step_3_user_agent_4 <- "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
 step_3_user_agent_5 <- "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
 
 # Assemble the retry-specific user-agent rotation list
@@ -79,11 +95,16 @@ global_user_agent_list_retry <- c(
   step_3_user_agent_4,
   step_3_user_agent_5
 )
+
+
+cat("Step 3 completed: VPN set and compared, new user agents defined.\n")
+
 ```
 
 
 
-```{r}
+```{r Step 4: Creating empty retry response logs}
+
 # For each entry in the retry master table, create an empty retry response log
 if (exists("global_retry_master_dt", envir = .GlobalEnv)) {
   for (i in seq_len(nrow(global_retry_master_dt))) {
@@ -104,27 +125,50 @@ if (exists("global_retry_master_dt", envir = .GlobalEnv)) {
     }
   }
 }
+
+cat("Step 4 completed: Empty retry response log created.\n")
+
+
 ```
 
 
 
-```{r}
-# Backup original master and user-agent list
-step_6_master_backup       <- global_master_dt
-step_6_user_agents_backup  <- global_user_agent_list
+```{r Step 5: Calling the Master Loop on the retry master}
+
+# Backup and replace original master and user-agent list
+step_5_master_backup       <- global_master_dt
+step_5_user_agents_backup  <- global_user_agent_list
 
 # Replace master table and UA list for retry processing
 global_master_dt         <- global_retry_master_dt
 global_user_agent_list   <- global_user_agent_list_retry
 
-# Define log file path for retry iteration
-step_6_log_filepath <- file.path(
-  "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output",
-  "urlset_scraper_retry_loop_log.txt"
-)
+# Backup Replace progression tables with retry versions
+for (i in seq_len(nrow(global_retry_master_dt))) {
+  lid <- global_retry_master_dt$layer_1_url_id[i]
+  
+  # Backup original progression table
+  orig_prog_name <- paste0("sitemap_id_", lid, "_progression_dt")
+  retry_prog_name <- paste0("sitemap_id_", lid, "_retry_progression_dt")
+  
+  if (exists(retry_prog_name, envir = .GlobalEnv)) {
+    # Backup original
+    assign(paste0(orig_prog_name, "_backup"), 
+           get(orig_prog_name, envir = .GlobalEnv), 
+           envir = .GlobalEnv)
+    
+    # Replace with retry version
+    assign(orig_prog_name, 
+           get(retry_prog_name, envir = .GlobalEnv), 
+           envir = .GlobalEnv)
+  }
+}
 
-# Redirect output to both console and log file
-sink(step_6_log_filepath, append = TRUE, split = TRUE)
+# Open a log file in the output folder and redirect console output to it
+step_5_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_master_loop_retry_log.txt")
+
+# Start sinking both to file and console
+sink(step_5_log_filepath, append = TRUE, split = TRUE)
 
 # Invoke the master loop on the retry master table
 step_9_master_loop_func()
@@ -133,160 +177,434 @@ step_9_master_loop_func()
 sink()
 
 # Restore original master table and user-agent list
-global_master_dt         <- step_6_master_backup
-global_user_agent_list   <- step_6_user_agents_backup
+global_master_dt         <- step_5_master_backup
+global_user_agent_list   <- step_5_user_agents_backup
+
+
+# Stop sinking and restore normal console output
+sink()
+
+
+cat("Step 5 completed: Master Loop called for the third time on retry entries.\n")
+
 ```
 
 
-
-```{r}
-# Initialize comparison results table
-step_7_comparison_df <- data.table(
-  domain_id               = integer(),
-  domain_url              = character(),
-  layer_1_url_id          = integer(),
-  layer_1_url             = character(),
-  links_with_error_before = integer(),
-  links_with_error_after  = integer(),
-  links_with_same_error   = integer(),
-  processed_links         = integer()
+```{r Step 6: Extract all links from output tables and create filtered versions}
+# Initialize an empty table for all extracted links and dates
+step_6_results_dt_all_links <- data.table(
+  domain_id      = integer(),
+  domain_url     = character(),
+  layer_1_url_id = integer(),
+  layer_1_url    = character(),
+  urlset_url     = character(),
+  result_link    = character(),
+  lastmod_date   = as.Date(character()),
+  pub_date       = as.Date(character()),
+  date           = as.Date(character())
 )
 
-# Iterate over each sitemap in the retry master
-for (i in seq_len(nrow(global_retry_master_dt))) {
-  # Extract identifiers
-  step_7_layer_id  <- global_retry_master_dt$layer_1_url_id[i]
-  step_7_domain_id <- global_retry_master_dt$domain_id[i]
-  step_7_domain_url<- global_retry_master_dt$domain_url[i]
-  step_7_layer_url <- global_retry_master_dt$layer_1_url[i]
+# Identify all output data tables in the environment
+step_6_output_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_output_dt$")
+
+for (nm in step_6_output_names) {
+  step_6_out_dt <- get(nm, envir = .GlobalEnv)
   
-  # Original and retry log names
-  step_7_orig_log_name  <- paste0("sitemap_id_", step_7_layer_id, "_response_log_dt")
-  step_7_retry_log_name <- paste0("sitemap_id_", step_7_layer_id, "_retry_response_log_dt")
+  for (i in seq_len(nrow(step_6_out_dt))) {
+    raw <- step_6_out_dt$urlset_content[i]
+    if (is.na(raw) || !nzchar(raw)) next
+    doc <- tryCatch(read_xml(raw), error = function(e) NULL)
+    if (is.null(doc)) next
+
+    ns_defs <- c(
+      ns   = "http://www.sitemaps.org/schemas/sitemap/0.9",
+      news = "http://www.google.com/schemas/sitemap-news/0.9"
+    )
+    
+    loc_nodes     <- xml_find_all(doc,       ".//ns:loc",                ns = ns_defs)
+    lastmod_nodes <- xml_find_all(doc,       ".//ns:lastmod",            ns = ns_defs)
+    pub_nodes     <- xml_find_all(doc,       ".//news:publication_date", ns = ns_defs)
+    
+    links    <- xml_text(loc_nodes)
+    mods_raw <- xml_text(lastmod_nodes)
+    pubs_raw <- xml_text(pub_nodes)
+    
+    mods_clean <- gsub("T.*", "", mods_raw)
+    mods_clean[!str_detect(mods_clean, "^\\d{4}-\\d{2}-\\d{2}$")] <- NA
+    mods_final <- as.Date(mods_clean)
+    
+    pubs_clean <- gsub("T.*", "", pubs_raw)
+    pubs_clean[!str_detect(pubs_clean, "^\\d{4}-\\d{2}-\\d{2}$")] <- NA
+    pubs_final <- as.Date(pubs_clean)
+    
+    mods_final <- rep(mods_final, length.out = length(links))
+    pubs_final <- rep(pubs_final, length.out = length(links))
+    
+    keep_idx <- which(str_detect(links, "^https?://"))
+    if (!length(keep_idx)) next
+
+    tmp <- data.table(
+      domain_id      = step_6_out_dt$domain_id[i],
+      domain_url     = step_6_out_dt$domain_url[i],
+      layer_1_url_id = step_6_out_dt$layer_1_url_id[i],
+      layer_1_url    = step_6_out_dt$layer_1_url[i],
+      urlset_url     = step_6_out_dt$urlset_url[i],
+      result_link    = links[keep_idx],
+      lastmod_date   = mods_final[keep_idx],
+      pub_date       = pubs_final[keep_idx]
+    )
+    
+    # combined date column (pub_date prioritized)
+    tmp[, date := coalesce(pub_date, lastmod_date)]
+    
+    step_6_results_dt_all_links <- rbind(step_6_results_dt_all_links, tmp, fill = TRUE)
+  }
+}
+
+# Filter by combined date column
+step_6_results_dt_filtered <- step_6_results_dt_all_links[
+  is.na(date) | (date >= global_date_start & date <= global_date_end)
+]
+
+# Print summary statistics
+cat(sprintf("Step 6 completed: Extracted links from output tables.\n"))
+cat(sprintf("Total links extracted: %d\n", nrow(step_6_results_dt_all_links)))
+cat(sprintf("Links in date range or without dates: %d\n", nrow(step_6_results_dt_filtered)))
+cat(sprintf("Links filtered out due to date: %d\n",
+    nrow(step_6_results_dt_all_links) - nrow(step_6_results_dt_filtered)))
+
+```
+
+
+```{r Step 7: Create result overview tables by domain and sitemap}
+# Initialize result overview table by domain
+step_7_result_overview_domain <- data.table(
+  domain_id                      = integer(),
+  domain_url                     = character(),
+  total_links_for_domain         = integer(),
+  total_valid_links              = integer(),
+  total_urlsets                  = integer(),
+  total_progression_entries      = integer(),
+  total_links_excluded           = integer(),
+  total_links_excluded_by_date   = integer(),
+  total_links_excluded_by_string = integer(),
+  total_errors                   = integer(),
+  total_verified_errors_before_retry = integer(),
+  total_verified_errors_after_retry  = integer(),
+  total_unsolved_errors          = integer()
+)
+
+# Initialize result overview table by sitemap
+step_7_result_overview_inputsitemap <- data.table(
+  domain_id                      = integer(),
+  domain_url                     = character(),
+  layer_1_url_id                 = integer(),
+  layer_1_url                    = character(),
+  total_links_for_domain         = integer(),
+  total_valid_links              = integer(),
+  total_urlsets                  = integer(),
+  total_progression_entries      = integer(),
+  total_links_excluded           = integer(),
+  total_links_excluded_by_date   = integer(),
+  total_links_excluded_by_string = integer(),
+  total_errors                   = integer(),
+  total_verified_errors_before_retry = integer(),
+  total_verified_errors_after_retry  = integer(),
+  total_unsolved_errors          = integer()
+)
+
+# Get unique combinations of domain_id, domain_url, layer_1_url_id, and layer_1_url from master table
+step_7_unique_entries <- unique(global_master_dt[, .(domain_id, domain_url, layer_1_url_id, layer_1_url)])
+
+# Process each unique sitemap entry
+for (i in seq_len(nrow(step_7_unique_entries))) {
+  step_7_current_domain_id <- step_7_unique_entries$domain_id[i]
+  step_7_current_domain_url <- step_7_unique_entries$domain_url[i]
+  step_7_current_layer_id <- step_7_unique_entries$layer_1_url_id[i]
+  step_7_current_layer_url <- step_7_unique_entries$layer_1_url[i]
   
-  # Skip if retry log does not exist
-  if (!exists(step_7_orig_log_name, envir = .GlobalEnv) ||
-      !exists(step_7_retry_log_name, envir = .GlobalEnv)) {
-    next
+  # Count total links for this sitemap from extracted links table
+  step_7_total_links <- nrow(step_6_results_dt_all_links[layer_1_url_id == step_7_current_layer_id])
+  
+  # Count valid links (in range or no date)
+  step_7_valid_links <- nrow(step_6_results_dt_filtered[layer_1_url_id == step_7_current_layer_id])
+  
+  # Count urlsets from output table
+  step_7_output_name <- paste0("sitemap_id_", step_7_current_layer_id, "_output_dt")
+  step_7_urlset_count <- if(exists(step_7_output_name, envir = .GlobalEnv)) {
+    nrow(get(step_7_output_name, envir = .GlobalEnv))
+  } else 0L
+  
+  # Count progression entries
+  step_7_prog_name <- paste0("sitemap_id_", step_7_current_layer_id, "_progression_dt")
+  step_7_prog_count <- if(exists(step_7_prog_name, envir = .GlobalEnv)) {
+    nrow(get(step_7_prog_name, envir = .GlobalEnv))
+  } else 0L
+  
+  # Count excluded by date from progression table
+  step_7_excluded_date_prog <- if(exists(step_7_prog_name, envir = .GlobalEnv)) {
+    nrow(get(step_7_prog_name, envir = .GlobalEnv)[processing_status == "excluded_by_date"])
+  } else 0L
+  
+  # Count excluded entries from error table
+  step_7_excluded_string_error <- nrow(global_error_dt[layer_1_url_id == step_7_current_layer_id & 
+                                                       error_category == "excluded_by_string"])
+  step_7_excluded_input_error <- nrow(global_error_dt[layer_1_url_id == step_7_current_layer_id & 
+                                                      error_category == "input_out_of_range"])
+  
+  # Calculate total excluded counts
+  step_7_total_excluded_by_date <- step_7_excluded_date_prog + step_7_excluded_input_error
+  step_7_total_excluded_by_string <- step_7_excluded_string_error
+  step_7_total_excluded <- step_7_total_excluded_by_date + step_7_total_excluded_by_string
+  
+  # Count errors
+  step_7_parse_errors <- nrow(global_error_dt[layer_1_url_id == step_7_current_layer_id & 
+                                              error_category %in% c("xml_parse_error", "unsupported_root_tag")])
+  step_7_response_errors <- if(exists(step_7_prog_name, envir = .GlobalEnv)) {
+    nrow(get(step_7_prog_name, envir = .GlobalEnv)[processing_status == "response_error"])
+  } else 0L
+  step_7_total_errors <- step_7_parse_errors + step_7_response_errors
+  
+  # Process retry statistics
+  step_7_orig_log_name <- paste0("sitemap_id_", step_7_current_layer_id, "_response_log_dt")
+  step_7_retry_log_name <- paste0("sitemap_id_", step_7_current_layer_id, "_retry_response_log_dt")
+  
+  # Count errors before retry - check if retry_flag column exists
+  step_7_errors_before_retry <- 0L
+  if(exists(step_7_orig_log_name, envir = .GlobalEnv)) {
+    step_7_orig_log_temp <- get(step_7_orig_log_name, envir = .GlobalEnv)
+    if("retry_flag" %in% names(step_7_orig_log_temp)) {
+      step_7_errors_before_retry <- nrow(step_7_orig_log_temp[retry_flag == TRUE])
+    } else {
+      # If retry_flag doesn't exist, count all entries as potential retries
+      step_7_errors_before_retry <- nrow(step_7_orig_log_temp)
+    }
   }
   
-  # Load logs
-  step_7_orig_log_dt  <- get(step_7_orig_log_name, envir = .GlobalEnv)
-  step_7_retry_log_dt <- get(step_7_retry_log_name, envir = .GlobalEnv)
+  # Calculate retry comparison metrics
+  step_7_errors_after_retry <- 0L
+  step_7_unsolved_errors <- 0L
   
-  # Count links with retry_flag == TRUE
-  step_7_links_with_error_before <- nrow(step_7_orig_log_dt[retry_flag == TRUE])
-  step_7_links_with_error_after  <- nrow(step_7_retry_log_dt[retry_flag == TRUE])
+  if(exists(step_7_orig_log_name, envir = .GlobalEnv) && 
+     exists(step_7_retry_log_name, envir = .GlobalEnv)) {
+    
+    step_7_orig_log <- get(step_7_orig_log_name, envir = .GlobalEnv)
+    step_7_retry_log <- get(step_7_retry_log_name, envir = .GlobalEnv)
+    
+    # Handle case where retry_flag might not exist
+    if("retry_flag" %in% names(step_7_orig_log)) {
+      step_7_orig_log_filtered <- step_7_orig_log[retry_flag == TRUE]
+    } else {
+      step_7_orig_log_filtered <- step_7_orig_log
+    }
+    
+    if("retry_flag" %in% names(step_7_retry_log)) {
+      step_7_retry_log_filtered <- step_7_retry_log[retry_flag == TRUE]
+    } else {
+      step_7_retry_log_filtered <- step_7_retry_log
+    }
+    
+    # Join original and retry logs to find matching errors
+    if(nrow(step_7_orig_log_filtered) > 0 && nrow(step_7_retry_log_filtered) > 0) {
+      step_7_same_errors <- merge(
+        step_7_orig_log_filtered[, .(requested_url, http_status_message)],
+        step_7_retry_log_filtered[, .(requested_url, http_status_message)],
+        by = c("requested_url", "http_status_message")
+      )
+      
+      # Join to find different errors
+      step_7_different_errors <- merge(
+        step_7_orig_log_filtered[, .(requested_url, orig_status = http_status_message)],
+        step_7_retry_log_filtered[, .(requested_url, retry_status = http_status_message)],
+        by = "requested_url"
+      )[orig_status != retry_status]
+      
+      step_7_errors_after_retry <- nrow(unique(step_7_same_errors, by = "requested_url"))
+      step_7_unsolved_errors <- nrow(unique(step_7_different_errors, by = "requested_url"))
+    }
+  }
   
-  # Count same errors: join on requested_url, status code and message
-  step_7_merged_dt <- merge(
-    step_7_orig_log_dt[retry_flag == TRUE, .(requested_url, http_status_code, http_status_message)],
-    step_7_retry_log_dt[retry_flag == TRUE, .(requested_url, http_status_code, http_status_message)],
-    by = c("requested_url", "http_status_code", "http_status_message")
-  )
-  step_7_links_with_same_error <- nrow(unique(step_7_merged_dt))
-  
-  # Calculate processed links difference
-  step_7_processed_links <- step_7_links_with_error_before - step_7_links_with_error_after
-  
-  # Append to comparison table
-  step_7_comparison_df <- rbind(
-    step_7_comparison_df,
+  # Add entry to sitemap overview table
+  step_7_result_overview_inputsitemap <- rbind(
+    step_7_result_overview_inputsitemap,
     data.table(
-      domain_id               = step_7_domain_id,
-      domain_url              = step_7_domain_url,
-      layer_1_url_id          = step_7_layer_id,
-      layer_1_url             = step_7_layer_url,
-      links_with_error_before = step_7_links_with_error_before,
-      links_with_error_after  = step_7_links_with_error_after,
-      links_with_same_error   = step_7_links_with_same_error,
-      processed_links         = step_7_processed_links
+      domain_id                      = step_7_current_domain_id,
+      domain_url                     = step_7_current_domain_url,
+      layer_1_url_id                 = step_7_current_layer_id,
+      layer_1_url                    = step_7_current_layer_url,
+      total_links_for_domain         = step_7_total_links,
+      total_valid_links              = step_7_valid_links,
+      total_urlsets                  = step_7_urlset_count,
+      total_progression_entries      = step_7_prog_count,
+      total_links_excluded           = step_7_total_excluded,
+      total_links_excluded_by_date   = step_7_total_excluded_by_date,
+      total_links_excluded_by_string = step_7_total_excluded_by_string,
+      total_errors                   = step_7_total_errors,
+      total_verified_errors_before_retry = step_7_errors_before_retry,
+      total_verified_errors_after_retry  = step_7_errors_after_retry,
+      total_unsolved_errors          = step_7_unsolved_errors
     ),
     fill = TRUE
   )
 }
+
+# Aggregate sitemap results by domain
+step_7_result_overview_domain <- step_7_result_overview_inputsitemap[,
+  .(total_links_for_domain         = sum(total_links_for_domain),
+    total_valid_links              = sum(total_valid_links),
+    total_urlsets                  = sum(total_urlsets),
+    total_progression_entries      = sum(total_progression_entries),
+    total_links_excluded           = sum(total_links_excluded),
+    total_links_excluded_by_date   = sum(total_links_excluded_by_date),
+    total_links_excluded_by_string = sum(total_links_excluded_by_string),
+    total_errors                   = sum(total_errors),
+    total_verified_errors_before_retry = sum(total_verified_errors_before_retry),
+    total_verified_errors_after_retry  = sum(total_verified_errors_after_retry),
+    total_unsolved_errors          = sum(total_unsolved_errors)),
+  by = .(domain_id, domain_url)
+]
+
+# Save overview tables
+saveRDS(step_7_result_overview_domain, 
+        file.path(step_1_logging_folder, "result_overview_domain.rds"))
+saveRDS(step_7_result_overview_inputsitemap, 
+        file.path(step_1_logging_folder, "result_overview_inputsitemap.rds"))
+
+print(step_7_result_overview_domain)
+print(step_7_result_overview_inputsitemap)
+
+
+cat("Step 7 completed: Results summarized by domains and input sitemaps.\n")
+
 ```
+```{r Step 8: Plotting results}
+# Prepare data for plotting
+step_8_plot_data <- step_6_results_dt_filtered %>%
+  mutate(date = coalesce(pub_date, lastmod_date)) %>%
+  filter(!is.na(date)) %>%
+  group_by(domain_url, date) %>%
+  summarise(link_count = n(), .groups = "drop")
 
+# Ensure step_8_plot_data is a data.table
+step_8_plot_data <- as.data.table(step_8_plot_data)
 
+# Clean domain names (remove TLDs)
+step_8_plot_data[, domain_clean := str_remove(domain_url, "\\..*")]
 
-```{r}
+# Create complete date-domain grid for all combinations
+all_dates <- seq.Date(as.Date("2024-12-29"), as.Date("2025-02-23"), by = "day")
+all_domains <- unique(step_8_plot_data$domain_clean)
+complete_grid <- CJ(date = all_dates, domain_clean = all_domains)
 
-# Initialize an empty table for all extracted links and dates
-step_8_results_dt_all_links <- data.table(
-  domain_id        = integer(),
-  domain_url       = character(),
-  layer_1_url_id   = integer(),
-  layer_1_url      = character(),
-  urlset_url       = character(),
-  result_link      = character(),
-  date             = as.Date(character())
-)
+# Merge with data and set 0 for missing combinations
+step_8_plot_data_complete <- merge(
+  complete_grid,
+  step_8_plot_data[, .(date, domain_clean, link_count)],
+  by = c("date", "domain_clean"),
+  all.x = TRUE
+)[, link_count := replace_na(link_count, 0L)]
 
-# Identify all output data tables in the environment
-step_8_output_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_output_dt$")
+# Add zero flag
+step_8_plot_data_complete[, zero_flag := link_count == 0]
 
-# Iterate over each output table to extract <loc> and <lastmod> entries
-for (nm in step_8_output_names) {
-  step_8_out_dt <- get(nm, envir = .GlobalEnv)
-  
-  # Loop through each record in the output table
-  for (i in seq_len(nrow(step_8_out_dt))) {
-    step_8_xml_raw <- step_8_out_dt$urlset_content[i]
-    # Skip empty or missing content
-    if (is.na(step_8_xml_raw) || !nzchar(step_8_xml_raw)) next
-    
-    # Parse XML document
-    step_8_doc <- tryCatch(read_xml(step_8_xml_raw), error = function(e) NULL)
-    if (is.null(step_8_doc)) next
-    
-    # Rename default namespace to 'ns'
-    step_8_ns <- xml_ns_rename(xml_ns(step_8_doc), d1 = "ns")
-    # Extract all <loc> and <lastmod> elements
-    step_8_loc_nodes     <- xml_find_all(step_8_doc, ".//ns:loc", ns = step_8_ns)
-    step_8_lastmod_nodes <- xml_find_all(step_8_doc, ".//ns:lastmod", ns = step_8_ns)
-    
-    # Convert node sets to character vectors
-    step_8_links    <- xml_text(step_8_loc_nodes)
-    step_8_mods_raw <- xml_text(step_8_lastmod_nodes)
-    
-    # Clean and parse dates from <lastmod>
-    step_8_mods_clean <- gsub("T.*", "", step_8_mods_raw)
-    step_8_mods_clean[!str_detect(step_8_mods_clean, "^\\d{4}-\\d{2}-\\d{2}$")] <- NA_character_
-    step_8_mods_final <- as.Date(step_8_mods_clean, format = "%Y-%m-%d")
-    
-    # Ensure length alignment between links and dates
-    step_8_mods_final <- rep(step_8_mods_final, length.out = length(step_8_links))
-    
-    # Keep only http/https links
-    step_8_keep_idx <- which(str_detect(step_8_links, "^https?://"))
-    if (length(step_8_keep_idx) == 0L) next
-    
-    # Assemble a temporary data.table for this urlset
-    step_8_tmp_dt <- data.table(
-      domain_id        = step_8_out_dt$domain_id[i],
-      domain_url       = step_8_out_dt$domain_url[i],
-      layer_1_url_id   = step_8_out_dt$layer_1_url_id[i],
-      layer_1_url      = step_8_out_dt$layer_1_url[i],
-      urlset_url       = step_8_out_dt$urlset_url[i],
-      result_link      = step_8_links[step_8_keep_idx],
-      date             = step_8_mods_final[step_8_keep_idx]
+# Factor for alphabetical order
+step_8_plot_data_complete[, domain_clean := factor(domain_clean, levels = sort(unique(domain_clean)))]
+
+# Split domains into two equal groups
+domain_levels <- levels(step_8_plot_data_complete$domain_clean)
+n <- length(domain_levels)
+half <- ceiling(n / 2)
+domain_group1 <- domain_levels[1:half]
+domain_group2 <- domain_levels[(half + 1):n]
+
+# Helper function to create heatmap plot
+plot_heatmap <- function(domain_subset, filename) {
+  data_subset <- step_8_plot_data_complete[domain_clean %in% domain_subset]
+
+  p <- ggplot() +
+    geom_tile(data = data_subset[zero_flag == TRUE & date >= as.Date("2025-01-01")],
+              aes(x = date, y = domain_clean), fill = "red") +
+    geom_tile(data = data_subset[link_count > 0],
+              aes(x = date, y = domain_clean, fill = link_count)) +
+    scale_fill_viridis(option = "C", name = "Links", trans = "log10", 
+                       breaks = c(1, 10, 100, 1000, 10000)) +
+    theme_minimal(base_size = 10) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+      axis.text.y = element_text(size = 5),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    ) +
+    labs(
+      title = "Daily Link Count per Domain",
+      x = "Date",
+      y = "Domains"
+    ) +
+    scale_x_date(
+      breaks = seq(as.Date("2024-12-29"), as.Date("2025-02-23"), by = "7 days"),
+      date_minor_breaks = "1 day",
+      date_labels = "%d.%m"
     )
-    
-    # Append to the master results table
-    step_8_results_dt_all_links <- rbind(
-      step_8_results_dt_all_links,
-      step_8_tmp_dt,
-      fill = TRUE
-    )
-  }
+
+  ggsave(filename = file.path(step_1_logging_folder, filename),
+         plot = p, width = 16, height = 10, dpi = 300)
 }
 
+# Generate both heatmaps
+plot_heatmap(domain_group1, "plot_step_8_heatmap_all_domains_part1.png")
+plot_heatmap(domain_group2, "plot_step_8_heatmap_all_domains_part2.png")
+
+# Helper function to create faceted plot
+plot_facet <- function(domain_subset, filename) {
+  data_subset <- step_8_plot_data_complete[domain_clean %in% domain_subset]
+
+  facet_plot <- ggplot(data_subset, aes(x = date, y = link_count)) +
+    geom_line(color = "steelblue", size = 0.5) +
+    geom_area(alpha = 0.3, fill = "steelblue") +
+    facet_wrap(~domain_clean, scales = "free_y", ncol = 7) +
+    theme_minimal(base_size = 10) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+      axis.text.y = element_text(size = 5),
+      strip.text = element_text(size = 6),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    ) +
+    labs(title = "Daily Link Count Trends per Domain") +
+    scale_x_date(
+      limits = c(as.Date("2024-12-29"), as.Date("2025-02-23")),
+      breaks = seq(as.Date("2024-12-29"), as.Date("2025-02-23"), by = "7 days"),
+      date_minor_breaks = "1 day",
+      date_labels = "%d.%m"
+    )
+
+  caption_text <- textGrob("X-axis: Date | Y-axis: Link Count", gp = gpar(fontsize = 10), hjust = 0.5)
+  final_plot <- plot_grid(facet_plot, caption_text, ncol = 1, rel_heights = c(1, 0.04))
+
+  ggsave(filename = file.path(step_1_logging_folder, filename),
+         plot = final_plot, width = 20, height = 12, dpi = 300)
+}
+
+# Generate both facet plots
+plot_facet(domain_group1, "plot_step_8_facet_all_domains_part1.png")
+plot_facet(domain_group2, "plot_step_8_facet_all_domains_part2.png")
+
+# Display summary tables in HTML output
+step_7_result_overview_domain
+step_7_result_overview_inputsitemap
+
+cat("Step 8 completed: Heatmaps and Faceted Trends (2 parts each) plotted and saved.\n")
 ```
 
 
-```{r}
+
+```{r Step 9: Saving results}
 # Define output directory for final datasets
-step_9_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/dataset"
+step_9_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/data"
 
 # Create directory if it does not exist
 if (!dir.exists(step_9_output_folder)) {
@@ -295,14 +613,16 @@ if (!dir.exists(step_9_output_folder)) {
 
 # Save the cleaned results table
 saveRDS(
-  step_8_results_dt_all_links_clean,
-  file = file.path(step_9_output_folder, "results_dt_all_links_clean.rds")
+  step_6_results_dt_filtered,
+  file = file.path(step_9_output_folder, "all_links_filtered_by_date.rds")
 )
 
-# Save the comparison results table
 saveRDS(
-  step_7_comparison_df,
-  file = file.path(step_9_output_folder, "response_log_comparison.rds")
+  step_6_results_dt_all_links,
+  file = file.path(step_9_output_folder, "all_links.rds")
 )
+
+cat("Step 9 completed: All data saved.\n")
+
 
 ```
