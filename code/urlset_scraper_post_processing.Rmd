@@ -27,7 +27,8 @@ library(viridis)
 library(grid)
 library(cowplot)
 
-step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
+step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/data"
+step_1_working_data_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
 step_1_logging_folder <- "/Users/zorbeyozcan/newsmedia_scraper/documentation"
 
 cat("Step 1 completed: Packages loaded, outputfolder defined.\n")
@@ -597,32 +598,26 @@ plot_facet(domain_group2, "plot_step_8_facet_all_domains_part2.png")
 step_7_result_overview_domain
 step_7_result_overview_inputsitemap
 
+
 cat("Step 8 completed: Heatmaps and Faceted Trends (2 parts each) plotted and saved.\n")
+
 ```
 
 
 
 ```{r Step 9: Saving results}
-# Define output directory for final datasets
-step_9_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/data"
-
-# Create directory if it does not exist
-if (!dir.exists(step_9_output_folder)) {
-  dir.create(step_9_output_folder, recursive = TRUE)
-}
-
 # Save the cleaned results table
 saveRDS(
   step_6_results_dt_filtered,
-  file = file.path(step_9_output_folder, "all_links_filtered_by_date.rds")
+  file = file.path(step_1_output_folder, "all_links_filtered_by_date.rds")
 )
 
 saveRDS(
   step_6_results_dt_all_links,
-  file = file.path(step_9_output_folder, "all_links.rds")
+  file = file.path(step_1_output_folder, "all_links.rds")
 )
 
-cat("Step 9 completed: All data saved.\n")
 
+cat("Step 9 completed: All data saved.\n")
 
 ```
