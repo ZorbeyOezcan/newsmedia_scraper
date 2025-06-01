@@ -609,7 +609,7 @@ step_6_cleaned_df <- step_6_cleaned_df %>%
 
 # Step 6.1 - Filter Media Sitemaps - These contain links to pictures, videos and podcasts exclusively
 step_6_cleaned_df <- step_6_cleaned_df %>%
-  mutate(filtered_because = ifelse(grepl(paste(c("image","bilder", "picture", "fotografie", "photo", "foto", "imagegallery", "gallery", "video", "media", "audio", "podcasts", "podcast" ), collapse = "|"), sitemap_URL, ignore.case = TRUE), "media_sitemaps", NA))
+  mutate(filtered_because = ifelse(grepl(paste(c("image","bilder", "picture", "fotografie", "photo", "foto", "imagegallery", "gallery", "video", "\\bmedia\\b", "audio", "podcasts", "podcast" ), collapse = "|"), sitemap_URL, ignore.case = TRUE), "media_sitemaps", NA))
 
 filtered_media_sitemaps_df <- step_6_cleaned_df %>% filter(!is.na(filtered_because))
 step_6_cleaned_df <- step_6_cleaned_df %>% filter(is.na(filtered_because)) %>% select(-filtered_because)

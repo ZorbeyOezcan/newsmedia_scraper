@@ -1110,7 +1110,7 @@ step_6_cleaned_df &lt;- step_6_cleaned_df %&gt;%
 
 # Step 6.1 - Filter Media Sitemaps - These contain links to pictures, videos and podcasts exclusively
 step_6_cleaned_df &lt;- step_6_cleaned_df %&gt;%
-  mutate(filtered_because = ifelse(grepl(paste(c(&quot;image&quot;,&quot;bilder&quot;, &quot;picture&quot;, &quot;fotografie&quot;, &quot;photo&quot;, &quot;foto&quot;, &quot;imagegallery&quot;, &quot;gallery&quot;, &quot;video&quot;, &quot;media&quot;, &quot;audio&quot;, &quot;podcasts&quot;, &quot;podcast&quot; ), collapse = &quot;|&quot;), sitemap_URL, ignore.case = TRUE), &quot;media_sitemaps&quot;, NA))
+  mutate(filtered_because = ifelse(grepl(paste(c(&quot;image&quot;,&quot;bilder&quot;, &quot;picture&quot;, &quot;fotografie&quot;, &quot;photo&quot;, &quot;foto&quot;, &quot;imagegallery&quot;, &quot;gallery&quot;, &quot;video&quot;, &quot;\\bmedia\\b&quot;, &quot;audio&quot;, &quot;podcasts&quot;, &quot;podcast&quot; ), collapse = &quot;|&quot;), sitemap_URL, ignore.case = TRUE), &quot;media_sitemaps&quot;, NA))
 
 filtered_media_sitemaps_df &lt;- step_6_cleaned_df %&gt;% filter(!is.na(filtered_because))
 step_6_cleaned_df &lt;- step_6_cleaned_df %&gt;% filter(is.na(filtered_because)) %&gt;% select(-filtered_because)
@@ -1454,7 +1454,47 @@ only final results and exported files.</p>
 <p>This operation is essential in replication-oriented workflows where
 deterministic output and minimal side effects are prerequisites for
 robustness and transparency.</p>
-<pre class="r"><code># Step 5 cleanup
+<pre class="r"><code># Step 1 cleanup
+rm(
+  input_df, 
+  step_1_all_df, 
+  step_1_debug_df, 
+  step_1_clean_df, 
+  step_1_get_namespace_type_func, 
+  step_1_get_root_tag_func, 
+  step_1_get_sitemap_type_func
+)
+
+# Step 2 cleanup
+rm(
+  step_2_get_root_tag_func, 
+  step_2_follow_path_func, 
+  step_2_process_sitemap_func, 
+  step_2_all_df, 
+  step_2_clean_df, 
+  step_2_debug_df, 
+  total_rows
+)
+
+# Step 4 cleanup
+rm(step_3_clean_df)
+
+# Step 4 cleanup
+rm(
+  sitemap_inspector_debug_df, 
+  step_4_wrangling_df, 
+  export_labeled_sitemaps, 
+  export_no_index_sitemap,
+  summary_table_sitemap,
+  domains_index,
+  num_domains_with_index,
+  num_domains_no_index,
+  export_simplified_labeled_sitemaps_df, 
+  desired_order, 
+  other_cols
+)
+
+# Step 5 cleanup
 rm(step_5_domain_urls_robotsUrls_robotsContents_sitemapUrls_sitemap_contents, 
    step_5_1_debug_unsuccsesful_fetches_df, step_5_get_sitemap_content_func, 
    step_5_valid_sitemaps_check, step_5_total_valid_sitemaps_check, 

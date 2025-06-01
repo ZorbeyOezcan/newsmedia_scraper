@@ -134,7 +134,7 @@ cat("Step 4 completed: Empty retry response log created.\n")
 
 
 
-```{r Step 5: Calling the Master Loop on the retry master}
+```{r Step 5: Calling the Master Loop on the retry master, results='hide', message=FALSE, warning=FALSE}
 
 # Backup and replace original master and user-agent list
 step_5_master_backup       <- global_master_dt
@@ -165,28 +165,13 @@ for (i in seq_len(nrow(global_retry_master_dt))) {
   }
 }
 
-# Open a log file in the output folder and redirect console output to it
-step_5_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_master_loop_retry_log.txt")
-
-# Start sinking both to file and console
-sink(step_5_log_filepath, append = TRUE, split = TRUE)
 
 # Invoke the master loop on the retry master table
 step_9_master_loop_func()
 
-# Stop the sink and restore normal output
-sink()
-
 # Restore original master table and user-agent list
 global_master_dt         <- step_5_master_backup
 global_user_agent_list   <- step_5_user_agents_backup
-
-
-# Stop sinking and restore normal console output
-sink()
-
-
-cat("Step 5 completed: Master Loop called for the third time on retry entries.\n")
 
 ```
 
@@ -478,6 +463,8 @@ print(step_7_result_overview_inputsitemap)
 cat("Step 7 completed: Results summarized by domains and input sitemaps.\n")
 
 ```
+
+
 ```{r Step 8: Plotting results}
 # Prepare data for plotting
 step_8_plot_data <- step_6_results_dt_filtered %>%
@@ -616,7 +603,6 @@ saveRDS(
   step_6_results_dt_all_links,
   file = file.path(step_1_output_folder, "all_links.rds")
 )
-
 
 cat("Step 9 completed: All data saved.\n")
 

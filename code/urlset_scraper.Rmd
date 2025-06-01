@@ -96,7 +96,7 @@ global_wayback_date_end   <- as.Date("2025-03-31")
 # Set global list of excluded strings (URLs containing these strings will be excluded)
 global_excluded_strings <- c(
   "image", "bilder", "picture", "fotografie", "photo", "foto", "imagegallery", "gallery",
-  "video", "media", "audio", "podcasts", "podcast",       
+  "video", "\\bmedia\\b", "audio", "podcasts", "podcast",       
   "themen.*-az", "topics", "topic", "author", "sport", "shop", "security"    
 )
 
@@ -2140,30 +2140,16 @@ This final chunk executes the main control logic by invoking the master loop (`s
 1. **Log File Preparation:**  
    Constructs a file path for a persistent log file within the logging directory.
 
-2. **Console Redirection:**  
-   Uses R's `sink()` function to redirect all subsequent output simultaneously to both the console and the log file for traceability.
-
-3. **Execution of Master Loop:**  
+2. **Execution of Master Loop:**  
    Calls the `step_9_master_loop_func()` which iteratively triggers the recursive sitemap processing for all valid entries.
 
-4. **Cleanup:**  
+3. **Cleanup:**  
    After loop execution, console redirection is terminated, and output behavior is reset to default.
 
-```{r Step 11: Calling the Master Loop}
-# Open a log file in the output folder and redirect console output to it
-step_11_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_master_loop_log.txt")
-
-# Start sinking both to file and console
-sink(step_11_log_filepath, append = TRUE, split = TRUE)
+```{r Step 11: Calling the Master Loop, results='hide', message=FALSE, warning=FALSE}
 
 # Invoke the master loop function
 step_9_master_loop_func()
-
-# Stop sinking and restore normal console output
-if (sink.number() > 0) sink()
-
-
-cat("Step 11 completed: Master Loop called for teh first time.\n")
 
 ```
 
@@ -2177,12 +2163,7 @@ In this chunk, we first define a helper function to query the Wayback Machine CD
 #### Function: step_12_get_snapshots_func
 The `step_12_get_snapshots_func` queries the CDX API endpoint for a JSON list of snapshot timestamps for a given URL, handling HTTP errors and rate limits explicitly. It performs an HTTP GET with query parameters for URL, output format, and requested fields, and checks for a 429 status to gracefully return an empty vector if rate-limited. Upon successful retrieval, it parses the JSON response, discards the header row, and returns a character vector of raw timestamp strings. This function encapsulates API interaction and enforces a simple contract: always return a vector (possibly empty) of timestamp identifiers for downstream processing.
 
-```{r Step 12: Calling the wayback API and looking for snapshots of sitemaps}
-# Open a log file in the output folder and redirect console output to it
-step_12_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_wayback_api_sitemaps_log.txt")
-
-# Start sinking only to file 
-sink(step_12_log_filepath, append = TRUE, split = FALSE)
+```{r Step 12: Calling the wayback API and looking for snapshots of sitemaps, results='hide', message=FALSE, warning=FALSE}
 
 # Define helper to fetch all snapshot timestamps from Wayback CDX API
 step_12_get_snapshots_func <- function(url) {
@@ -2393,14 +2374,6 @@ for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
   )
 }
 
-# Stop sinking and restore normal console output
-if (sink.number() > 0) sink()
-
-# Print summary for knitted output
-
-cat(sprintf("Step 12 completed: %d new entries added to progression data tables.\n", step_12_total_new_entries))
-
-
 ```
 
 
@@ -2422,12 +2395,7 @@ This chunk first enumerates all progression tables in the global environment and
 - Updated output tables `sitemap_id_<n>_output_dt` enriched with any newly scraped URLSET content.
 - Corresponding updates to the global master and progression tables for each successfully retrieved snapshot.
 
-```{r step 13: Calling the wayback API and looking for snapshots of urlsets }
-# Open a log file in the output folder and redirect console output to it
-step_13_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_wayback_api_urlsets_log.txt")
-
-# Start sinking only to file (no console output during knitting)
-sink(step_13_log_filepath, append = TRUE, split = FALSE)
+```{r step 13: Calling the wayback API and looking for snapshots of urlsets, results='hide', message=FALSE, warning=FALSE}
 
 # Load all progression tables and extract URLSET entries that were out-of-range
 prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
@@ -2571,13 +2539,6 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
   )
 }
 
-# Stop sinking and restore normal console output
-if (sink.number() > 0) sink()
-
-# Print summary for knitted output
-cat(sprintf("Step 13 completed: %d new urlsets scraped from Wayback snapshots.\n", step_13_total_new_urlsets))
-
-
 ```
 
 
@@ -2595,22 +2556,11 @@ This chunk re-invokes the master processing loop to handle any new sitemap or UR
 - Continued updates to `global_master_dt`, progression tables, and output tables as new links are processed.
 - Detailed logs in the specified Wayback‐focused log file.
 
-```{r: Step 14: Calling the master loop again to process the new wayback links}
-
-# Define the log file path for step 14
-step_14_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_master_loop_wayback_api_sitemaps_log.txt")
-
-# Redirect all console output to the log file and the console
-sink(step_14_log_filepath, append = TRUE, split = TRUE)
+```{r Step 14: Calling the master loop again to process the new wayback links, results='hide', message=FALSE, warning=FALSE}
 
 # Invoke the master loop function to process any remaining sitemap entries
 step_9_master_loop_func()
 
-# Stop redirecting and restore normal console output
-if (sink.number() > 0) sink()
-
-
-cat("Step 14 completed: Master Loop called for the second time.\n")
 
 ```
 ## Code Chunk 15: Wrangling and Saving Outputs, Building Retry Progression Tables
@@ -2638,6 +2588,11 @@ The `step_15_wrangle_and_save_func` encapsulates six discrete operations:
 6. **Serialize All Objects:** Gathers all progression, output, response, and retry table names into a list and writes each to disk as an `.rds` file under the designated output folder, ensuring complete archival of the scraping process state.
 
 ```{r Step 15: Wrangling and saving outputs, generating retry_progression_dts}
+
+# Summary of Wayback processes: 
+cat(sprintf(" %d new entries added to progression data tables in step 12.\n", step_12_total_new_entries))
+cat(sprintf(" %d new urlsets scraped from Wayback snapshots in step 13.\n", step_13_total_new_urlsets))
+
 
 step_15_wrangle_and_save_func <- function() {
   # 1. Remove "sort_order" from all progression tables
