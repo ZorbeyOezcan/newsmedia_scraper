@@ -2181,8 +2181,8 @@ The `step_12_get_snapshots_func` queries the CDX API endpoint for a JSON list of
 # Open a log file in the output folder and redirect console output to it
 step_12_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_wayback_api_sitemaps_log.txt")
 
-# Start sinking both to file and console
-sink(step_12_log_filepath, append = TRUE, split = TRUE)
+# Start sinking only to file 
+sink(step_12_log_filepath, append = TRUE, split = FALSE)
 
 # Define helper to fetch all snapshot timestamps from Wayback CDX API
 step_12_get_snapshots_func <- function(url) {
@@ -2256,6 +2256,9 @@ step_12_overview_dt <- data.table::data.table(
   added_wayback_entries = integer()
 )
 
+# Track total new entries across all sitemaps
+step_12_total_new_entries <- 0L
+
 # Iterate by unique layer_1_url_id to process Wayback snapshots
 for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
   subset_dt <- step_12_wayback_validation_dt[layer_1_url_id == lid]
@@ -2263,154 +2266,143 @@ for (lid in unique(step_12_wayback_validation_dt$layer_1_url_id)) {
   total_new <- 0L
 
   prog_name <- paste0("sitemap_id_", lid, "_progression_dt")
-  template_dt <- get(prog_name, envir = .GlobalEnv)[0]
-  wayback_name <- paste0("sitemap_id_", lid, "_wayback_dt")
-  assign(wayback_name, data.table::copy(template_dt), envir = .GlobalEnv)
+  existing_prog_dt <- get(prog_name, envir = .GlobalEnv)
 
   for (i in seq_len(nrow(subset_dt))) {
-  row <- subset_dt[i]
+    row <- subset_dt[i]
 
-  tryCatch({
-    cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
-    timestamps <- step_12_get_snapshots_func(row$current_url)
-    Sys.sleep(4)  # pause required by CDX-API
+    tryCatch({
+      cat(sprintf("API Call: Requesting CDX snapshots for URL: %s\n", row$current_url))
+      timestamps <- step_12_get_snapshots_func(row$current_url)
+      Sys.sleep(4)  # pause required by CDX-API
 
-    dates <- lubridate::ymd(substr(timestamps, 1, 8))
-    sel_idx <- which(dates >= global_wayback_date_start & dates <= global_wayback_date_end)
-    cat(sprintf("Snapshots in selected range: %d\n", length(sel_idx)))
+      dates <- lubridate::ymd(substr(timestamps, 1, 8))
+      sel_idx <- which(dates >= global_wayback_date_start & dates <= global_wayback_date_end)
+      cat(sprintf("Snapshots in selected range: %d\n", length(sel_idx)))
 
-    if (length(sel_idx) > 0L) {
-      snapshot_found <- TRUE
+      if (length(sel_idx) > 0L) {
+        snapshot_found <- TRUE
 
-      for (j in sel_idx) {
-        ts <- timestamps[j]
-        raw_url <- sprintf("http://web.archive.org/web/%sid_/%s", ts, row$current_url)
-        resp <- try(httr::GET(raw_url, httr::timeout(30)), silent = TRUE)
+        for (j in sel_idx) {
+          ts <- timestamps[j]
+          raw_url <- sprintf("http://web.archive.org/web/%sid_/%s", ts, row$current_url)
+          resp <- try(httr::GET(raw_url, httr::timeout(30)), silent = TRUE)
 
-        if (inherits(resp, "try-error") || httr::status_code(resp) >= 400) {
-          cat(sprintf("Failed to load snapshot at: %s – skipping\n", raw_url))
-          next
-        }
-
-        xml_text <- try(httr::content(resp, as = "text", encoding = "UTF-8"), silent = TRUE)
-        if (inherits(xml_text, "try-error") || nchar(xml_text) == 0) {
-          cat(sprintf("Empty or invalid XML content at snapshot URL: %s – skipping\n", raw_url))
-          next
-        }
-
-        doc <- try(xml2::read_xml(xml_text), silent = TRUE)
-        if (inherits(doc, "try-error")) {
-          cat(sprintf("Failed to parse XML at: %s – skipping\n", raw_url))
-          next
-        }
-
-        ns_map <- try(xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns"), silent = TRUE)
-        if (inherits(ns_map, "try-error")) {
-          cat(sprintf("Namespace parsing failed at: %s – skipping\n", raw_url))
-          next
-        }
-
-        loc_nodes <- xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map)
-        links <- xml2::xml_text(loc_nodes)
-
-        if (length(links) > 0L) {
-          existing_dt <- get(prog_name, envir = .GlobalEnv)
-          next_id <- max(existing_dt$current_url_id, na.rm = TRUE) + 1L
-
-          new_rows <- lapply(seq_along(links), function(k) {
-            data.table::data.table(
-              domain_id = row$domain_id,
-              domain_url = row$domain_url,
-              layer_1_url_id = row$layer_1_url_id,
-              layer_1_url = row$layer_1_url,
-              current_url_id = next_id + k - 1L,
-              current_url = links[k],
-              parent_url_id = row$current_url_id,
-              processed = FALSE,
-              processing_status = "in_progress",
-              sorted = "no",
-              sort_place = NA_integer_,
-              in_range = NA_character_,
-              root_tag = "unknown",
-              subsitemap_status = NA_character_,
-              sort_order = list(data.table::data.table()),
-              subsitemap_progress = NA_character_,
-              pagination_group = NA_character_,
-              pagination_index = NA_integer_,
-              pagination_group_status = NA_character_,
-              timestamp = Sys.time()
-            )
-          }) |> data.table::rbindlist()
-
-          wayback_dt <- get(wayback_name, envir = .GlobalEnv)
-          wayback_dt <- rbind(wayback_dt, new_rows, fill = TRUE)
-          assign(wayback_name, wayback_dt, envir = .GlobalEnv)
-
-          for (row_new in seq_len(nrow(new_rows))) {
-            nr <- new_rows[row_new]
-            step_7_1_progression_update(
-              domain_id = nr$domain_id,
-              domain_url = nr$domain_url,
-              layer_1_url_id = nr$layer_1_url_id,
-              layer_1_url = nr$layer_1_url,
-              current_url = nr$current_url,
-              parent_url_id = nr$parent_url_id,
-              processed = nr$processed,
-              processing_status = nr$processing_status,
-              sorted = nr$sorted,
-              sort_place = nr$sort_place,
-              in_range = nr$in_range,
-              root_tag = nr$root_tag,
-              subsitemap_status = nr$subsitemap_status,
-              subsitemap_progress = nr$subsitemap_progress,
-              pagination_group = nr$pagination_group,
-              pagination_index = nr$pagination_index,
-              pagination_group_status = nr$pagination_group_status
-            )
-            total_new <- total_new + 1L
+          if (inherits(resp, "try-error") || httr::status_code(resp) >= 400) {
+            cat(sprintf("Failed to load snapshot at: %s – skipping\n", raw_url))
+            next
           }
 
-          step_7_2_master_dt_update_func(
-            domain_id = row$domain_id,
-            domain_url = row$domain_url,
-            l1_id = row$layer_1_url_id,
-            layer_1_url = row$layer_1_url,
-            request_increment = 0L,
-            current_user_agent_id = NA_integer_
-          )
+          xml_text <- try(httr::content(resp, as = "text", encoding = "UTF-8"), silent = TRUE)
+          if (inherits(xml_text, "try-error") || nchar(xml_text) == 0) {
+            cat(sprintf("Empty or invalid XML content at snapshot URL: %s – skipping\n", raw_url))
+            next
+          }
+
+          doc <- try(xml2::read_xml(xml_text), silent = TRUE)
+          if (inherits(doc, "try-error")) {
+            cat(sprintf("Failed to parse XML at: %s – skipping\n", raw_url))
+            next
+          }
+
+          ns_map <- try(xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns"), silent = TRUE)
+          if (inherits(ns_map, "try-error")) {
+            cat(sprintf("Namespace parsing failed at: %s – skipping\n", raw_url))
+            next
+          }
+
+          loc_nodes <- xml2::xml_find_all(doc, ".//ns:loc", ns = ns_map)
+          links <- xml2::xml_text(loc_nodes)
+
+          if (length(links) > 0L) {
+            # Check which links are new
+            new_links <- links[!links %in% existing_prog_dt$current_url]
+            
+            if (length(new_links) > 0L) {
+              # Add only new links with default values
+              for (new_link in new_links) {
+                step_7_1_progression_update(
+                  domain_id = row$domain_id,
+                  domain_url = row$domain_url,
+                  layer_1_url_id = row$layer_1_url_id,
+                  layer_1_url = row$layer_1_url,
+                  current_url = new_link,
+                  parent_url_id = row$current_url_id,
+                  processed = FALSE,
+                  processing_status = "in_progress",
+                  sorted = "no",
+                  sort_place = NA_integer_,
+                  in_range = NA_character_,
+                  root_tag = "unknown",
+                  subsitemap_status = NA_character_,
+                  sort_order = list(data.table::data.table()),
+                  subsitemap_progress = NA_character_,
+                  pagination_group = NA_character_,
+                  pagination_index = NA_integer_,
+                  pagination_group_status = NA_character_
+                )
+                total_new <- total_new + 1L
+              }
+              
+              # Update parent sitemap progress after adding new links
+              step_7_1_progression_update(
+                domain_id = row$domain_id,
+                domain_url = row$domain_url,
+                layer_1_url_id = row$layer_1_url_id,
+                layer_1_url = row$layer_1_url,
+                current_url = row$current_url,
+                parent_url_id = row$parent_url_id,
+                root_tag = "sitemapindex"
+              )
+            }
+          }
         }
       }
-    }
-  }, error = function(e) {
-    # Log any unhandled error within this iteration
-    cat(sprintf("Unhandled error in processing snapshots for URL: %s\nMessage: %s\n",
-                row$current_url, conditionMessage(e)))
-  })
-}
+    }, error = function(e) {
+      # Log any unhandled error within this iteration
+      cat(sprintf("Unhandled error in processing snapshots for URL: %s\nMessage: %s\n",
+                  row$current_url, conditionMessage(e)))
+    })
+  }
 
-# Record summary info per layer_1_url_id
-step_12_overview_dt <- rbind(
-  step_12_overview_dt,
-  data.table::data.table(
-    layer_1_url_id = lid,
-    layer_1_url = subset_dt$layer_1_url[1],
-    wayback_snapshot = snapshot_found,
-    added_wayback_entries = total_new
-  ),
-  fill = TRUE
-)
+  # Update master table if new entries were added
+  if (total_new > 0L) {
+    step_7_2_master_dt_update_func(
+      domain_id = subset_dt$domain_id[1],
+      domain_url = subset_dt$domain_url[1],
+      l1_id = lid,
+      layer_1_url = subset_dt$layer_1_url[1],
+      request_increment = 0L,
+      current_user_agent_id = NA_integer_
+    )
+  }
 
-# Remove temp wayback dt if snapshot was found
-if (snapshot_found) rm(list = wayback_name, envir = .GlobalEnv)
+  # Add to total counter
+  step_12_total_new_entries <- step_12_total_new_entries + total_new
+
+  # Record summary info per layer_1_url_id
+  step_12_overview_dt <- rbind(
+    step_12_overview_dt,
+    data.table::data.table(
+      layer_1_url_id = lid,
+      layer_1_url = subset_dt$layer_1_url[1],
+      wayback_snapshot = snapshot_found,
+      added_wayback_entries = total_new
+    ),
+    fill = TRUE
+  )
 }
 
 # Stop sinking and restore normal console output
 if (sink.number() > 0) sink()
 
+# Print summary for knitted output
 
-cat("Step 12 completed: Indexsitemaps revalidated.\n")
+cat(sprintf("Step 12 completed: %d new entries added to progression data tables.\n", step_12_total_new_entries))
+
 
 ```
+
 
 ## Step 13: Revalidating Out-of-Range URLSets via Wayback CDX API
 
@@ -2434,8 +2426,8 @@ This chunk first enumerates all progression tables in the global environment and
 # Open a log file in the output folder and redirect console output to it
 step_13_log_filepath <- file.path(step_1_logging_folder, "urlset_scraper_wayback_api_urlsets_log.txt")
 
-# Start sinking both to file and console
-sink(step_13_log_filepath, append = TRUE, split = TRUE)
+# Start sinking only to file (no console output during knitting)
+sink(step_13_log_filepath, append = TRUE, split = FALSE)
 
 # Load all progression tables and extract URLSET entries that were out-of-range
 prog_names <- ls(envir = .GlobalEnv, pattern = "^sitemap_id_[0-9]+_progression_dt$")
@@ -2464,6 +2456,9 @@ step_13_overview_dt <- data.table::data.table(
   wayback_snapshot = logical(),
   added_wayback_entries = integer()
 )
+
+# Track total new urlsets scraped across all sitemaps
+step_13_total_new_urlsets <- 0L
 
 # Iterate over each unique layer_1_url_id
 for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
@@ -2509,17 +2504,24 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
           next
         }
 
-        out_nm <- paste0("sitemap_id_", lid, "_output_dt")
-        out_dt <- get(out_nm, envir = .GlobalEnv)
+        # Check if this URLSet contains in-range content using step_5_1
+        ns_map <- xml2::xml_ns_rename(xml2::xml_ns(doc), d1 = "ns")
+        date_check_result <- step_5_1_date_check_urlset_func(
+          xml_doc = doc,
+          ns_map = ns_map,
+          date_from = global_date_start,
+          date_to = global_date_end
+        )
 
-        if (!wayback_url %in% out_dt$urlset_url) {
-          cat(sprintf("Valid snapshot found in range: %s\n", wayback_url))
+        # Only process if URLSet contains in-range content
+        if (date_check_result$decision == "proceed" && date_check_result$reason == "in_range") {
+          cat(sprintf("Valid in-range snapshot found: %s\n", wayback_url))
 
-          # Process with step_7_4 function
+          # Process with step_7_4 function using the original URL for progression tracking
           res <- try(step_7_4_urlset_scraper_func(
-            url               = wayback_url,
+            url               = row$current_url,  # Use original URL for progression consistency
             http_response     = resp,
-            xml_doc           = NULL,
+            xml_doc           = doc,
             global_date_start = global_date_start,
             global_date_end   = global_date_end,
             domain_id         = row$domain_id,
@@ -2534,16 +2536,6 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
             total_new <- total_new + 1L
           }
         }
-
-        # Always update master after attempt
-        step_7_2_master_dt_update_func(
-          domain_id             = row$domain_id,
-          domain_url            = row$domain_url,
-          l1_id                 = lid,
-          layer_1_url           = row$layer_1_url,
-          request_increment     = 0L,
-          current_user_agent_id = NA_integer_
-        )
       }
     }
   }, error = function(e) {
@@ -2551,6 +2543,21 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
                 row$current_url, conditionMessage(e)))
   })
 }
+
+  # Update master table if new urlsets were scraped
+  if (total_new > 0L) {
+    step_7_2_master_dt_update_func(
+      domain_id             = subset_dt$domain_id[1],
+      domain_url            = subset_dt$domain_url[1],
+      l1_id                 = lid,
+      layer_1_url           = subset_dt$layer_1_url[1],
+      request_increment     = 0L,
+      current_user_agent_id = NA_integer_
+    )
+  }
+
+  # Add to total counter
+  step_13_total_new_urlsets <- step_13_total_new_urlsets + total_new
 
   step_13_overview_dt <- rbind(
     step_13_overview_dt,
@@ -2567,10 +2574,13 @@ for (lid in unique(step_13_wayback_validation_urlset_dt$layer_1_url_id)) {
 # Stop sinking and restore normal console output
 if (sink.number() > 0) sink()
 
+# Print summary for knitted output
+cat(sprintf("Step 13 completed: %d new urlsets scraped from Wayback snapshots.\n", step_13_total_new_urlsets))
 
-cat("Step 13 completed: Urlsets out of range revalidated.\n")
 
 ```
+
+
 
 ## Code Chunk 14: Calling the Master Loop for Wayback Links
 
