@@ -54,3 +54,6 @@ rsconnect/
 working_data/
 data/
 
+# data for link scraper: 
+/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data
+
