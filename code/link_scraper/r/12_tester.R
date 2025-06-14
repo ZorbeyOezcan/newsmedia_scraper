@@ -19,10 +19,11 @@
 # ==============================================================================
 
 # Load required packages
-suppressPackageStartupMessages({
-  library(data.table)
-  library(testthat)
-})
+library(data.table)
+library(testthat)
+library(readxl)
+library(stringr)
+
 
 # Configuration Function
 get_module_paths <- function() {
@@ -36,10 +37,142 @@ get_module_paths <- function() {
   )
 }
 
-# ==============================================================================
-# 06_HTML_PARSER TESTS
-# ==============================================================================
+# 00 Data structure check function 
 
+test_data_structure <- function(dt_name) {
+  codebook_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/code_book.xlsx"
+  
+  if (!exists(dt_name, envir = .GlobalEnv)) {
+    stop(paste0("Data.table '", dt_name, "' not found in global environment"))
+  }
+  
+  dt <- get(dt_name, envir = .GlobalEnv)
+  
+  if (!is.data.table(dt)) {
+    stop("Input is not a data.table")
+  }
+  
+  # Read whole sheet with headers
+  raw_codebook <- read_excel(path = codebook_path, sheet = dt_name, col_names = TRUE, trim_ws = TRUE)
+  raw_codebook <- as.data.table(raw_codebook)
+  
+  # Transpose: 
+  new_colnames <- raw_codebook[[1]]  # first column (col_name)
+  mat <- as.matrix(raw_codebook[, -1, with = FALSE])
+  mat_t <- t(mat)
+  codebook_dt <- as.data.table(mat_t)
+  setnames(codebook_dt, new_colnames)
+  codebook_dt[, col_name := colnames(raw_codebook)[-1]]
+  setcolorder(codebook_dt, c("col_name", setdiff(names(codebook_dt), "col_name")))
+  
+  # Convert columns to character and lowercase type for safe comparison
+  codebook_dt[, variable_type := tolower(as.character(variable_type))]
+  codebook_dt[, valid_values := as.character(valid_values)]
+  
+  # Columns to ignore in the check
+  ignore_cols <- c("path")
+  
+  # Filter expected columns (exclude ignored)
+  expected_cols_filtered <- codebook_dt[!col_name %in% ignore_cols, col_name]
+  
+  dt_colnames <- colnames(dt)
+  
+  colname_messages <- character()
+  
+  # Check number of columns (only counting relevant columns)
+  if (length(dt_colnames) != length(expected_cols_filtered)) {
+    colname_messages <- c(colname_messages,
+                          paste0("Number of columns differs: expected ", length(expected_cols_filtered),
+                                 ", found ", length(dt_colnames)))
+  }
+  
+  # Check column names order and equality
+  n_check <- min(length(dt_colnames), length(expected_cols_filtered))
+  for (i in seq_len(n_check)) {
+    if (dt_colnames[i] != expected_cols_filtered[i]) {
+      colname_messages <- c(colname_messages,
+                            paste0('column "', dt_colnames[i], '" (', i, '): expected "', expected_cols_filtered[i], '" but found "', dt_colnames[i], '"'))
+    }
+  }
+  
+  # Map R types to simplified type names
+  map_type <- function(x) {
+    if (inherits(x, "integer")) return("int")
+    if (inherits(x, "numeric") | inherits(x, "double")) return("num")
+    if (inherits(x, "character")) return("char")
+    if (inherits(x, "logical")) return("logical")
+    if (inherits(x, "factor")) return("char")
+    tolower(class(x)[1])
+  }
+  
+  vartype_messages <- character()
+  for (i in seq_len(nrow(codebook_dt))) {
+    col <- codebook_dt$col_name[i]
+    if (!(col %in% dt_colnames)) next
+    if (col %in% ignore_cols) next
+    
+    actual_type <- map_type(dt[[col]])
+    expected_type <- codebook_dt$variable_type[i]
+    
+    if (actual_type != expected_type) {
+      vartype_messages <- c(vartype_messages,
+                            paste0('column "', col, '" (', i, '): expected type "', expected_type, '" but found "', actual_type, '"'))
+    }
+  }
+  
+  validvals_messages <- character()
+  for (i in seq_len(nrow(codebook_dt))) {
+    col <- codebook_dt$col_name[i]
+    if (!(col %in% dt_colnames)) next
+    if (col %in% ignore_cols) next
+    
+    valid_values_raw <- codebook_dt$valid_values[i]
+    if (is.na(valid_values_raw) || valid_values_raw == "") next
+    
+    valid_values_list <- str_trim(unlist(strsplit(valid_values_raw, ";")))
+    actual_values <- unique(as.character(dt[[col]]))
+    invalid_values <- setdiff(actual_values, valid_values_list)
+    
+    if (length(invalid_values) > 0) {
+      invalid_values_msg <- paste(invalid_values, collapse = "\n")
+      validvals_messages <- c(validvals_messages,
+                              paste0('column "', col, '" (', i, '): unexpected values found:\n', invalid_values_msg))
+    }
+  }
+  
+  cat("col_names:\n")
+  if (length(colname_messages) == 0) {
+    cat("all column names correct\n\n")
+  } else {
+    cat(paste0(colname_messages, collapse = "\n"), "\n\n")
+  }
+  
+  cat("variable_type:\n")
+  if (length(vartype_messages) == 0) {
+    cat("all variable types correct\n\n")
+  } else {
+    cat(paste0(vartype_messages, collapse = "\n"), "\n\n")
+  }
+  
+  cat("valid_values:\n")
+  if (length(validvals_messages) == 0) {
+    cat("all values correct\n")
+  } else {
+    cat(paste0(validvals_messages, collapse = "\n"), "\n")
+  }
+}
+
+
+test_data_structure("input_ds")
+test_data_structure("final_output_ds")
+test_data_structure("vpn_log_dt")
+test_data_structure("chunk_01")
+
+
+#######
+
+
+# 06_HTML_PARSER TESTS
 # Test domain classifier function
 test_06_parser_domain_classifier <- function() {
   message("\n==== Testing 06_html_parser Domain Classifier ====")

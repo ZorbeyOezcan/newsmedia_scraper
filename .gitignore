@@ -57,3 +57,8 @@ data/
 # data for link scraper: 
 /Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data
 
+# Code book: 
+/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/code_book.xlsx
+
+
+

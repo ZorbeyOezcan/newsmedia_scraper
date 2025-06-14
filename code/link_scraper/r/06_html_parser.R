@@ -20,14 +20,12 @@
 # ==============================================================================
 
 # Load required packages
-suppressPackageStartupMessages({
-  library(data.table)
-  library(httr)
-  library(rvest)
-  library(jsonlite)
-  library(lubridate)
-  library(stringr)
-})
+library(data.table)
+library(httr)
+library(rvest)
+library(jsonlite)
+library(lubridate)
+library(stringr)
 
 # Configuration Function
 get_module_paths <- function() {
@@ -41,9 +39,8 @@ get_module_paths <- function() {
   )
 }
 
-# ==============================================================================
-# SETUP: Load and prepare paywall domain data
-# ==============================================================================
+
+# 1. SETUP: Load and prepare paywall domain data
 
 setup_paywall_domains <- function() {
   paths <- get_module_paths()
@@ -86,9 +83,8 @@ setup_paywall_domains <- function() {
   }
 }
 
-# ==============================================================================
-# STEP 1: Extract parser rules from paperboy repository
-# ==============================================================================
+
+# 2: Extract parser rules from paperboy repository
 
 # Function to transform domain to GitHub filename
 domain_to_paperboy_filename <- function(domain) {
@@ -211,9 +207,8 @@ fetch_parser_rules <- function(domains) {
   return(parser_rules)
 }
 
-# ==============================================================================
-# STEP 2: Paywall detection setup (TO-DO: Full implementation)
-# ==============================================================================
+
+# 3: Paywall detection setup (TO-DO: Full implementation)
 
 # Placeholder for paywall detection rule generation
 generate_paywall_rules <- function(paywall_data) {
@@ -258,9 +253,8 @@ generate_paywall_rules <- function(paywall_data) {
   return(paywall_rules)
 }
 
-# ==============================================================================
-# MAIN PARSER FUNCTIONS
-# ==============================================================================
+
+# 4: Main parser functions
 
 # Load rules (called once at module initialization)
 .load_parser_rules <- function() {
@@ -451,9 +445,8 @@ parse_html_batch <- function(html_list, url_list, rules = NULL) {
   ))
 }
 
-# ==============================================================================
-# MODULE INITIALIZATION (Run once to setup)
-# ==============================================================================
+
+# 5. Module initialization 
 
 # This function should be called once to initialize the module
 initialize_html_parser <- function() {
@@ -482,8 +475,6 @@ initialize_html_parser <- function() {
   ))
 }
 
-# ==============================================================================
-# Initing: 
-# ==============================================================================
+# Execute
 
 initialize_html_parser()  
