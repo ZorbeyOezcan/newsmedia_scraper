@@ -67,12 +67,13 @@ create_vpn_log <- function() {
 }
 
 vpn_log_dt <- create_vpn_log()
+rm(create_vpn_log)
 
 ######
 
 # 2: Function to add or update personal IP address entry in the vpn log data.table
 ## Execute without active VPN
-update_personal_ip_in_vpn_log <- function(vpn_log_dt) {
+func_03_update_personal_ip_in_vpn_log <- function(vpn_log_dt) {
   
   # Get current system time for timestamps
   current_time <- Sys.time()
@@ -121,19 +122,52 @@ update_personal_ip_in_vpn_log <- function(vpn_log_dt) {
   return(vpn_log_dt)
 }
 
-vpn_log_dt <- update_personal_ip_in_vpn_log(vpn_log_dt)
+# vpn_log_dt <- func_03_update_personal_ip_in_vpn_log(vpn_log_dt)
 
 ######
 
 # 3: Function to add or update VPN IP address entry in the vpn log data.table
 ## Execute with active VPN
-update_vpn_ip_in_vpn_log <- function(vpn_log_dt) {
+func_03_initialzie_vpn_connnection <- function() {
+  
+  # Load required packages
+  library(data.table)
+  library(httr)
+  
+  # Retrieve paths configuration
+  get_module_paths <- function() {
+    base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
+    list(
+      input = file.path(base_path, "data", "input"),
+      output = file.path(base_path, "data", "output"),
+      config = file.path(base_path, "data", "config"),
+      state = file.path(base_path, "data", "state"),
+      logs = file.path(base_path, "data", "logs")
+    )
+  }
+  
+  paths <- get_module_paths()
+  vpn_log_file <- file.path(paths$logs, "03_vpn_log.rds")
+  
+  # Load existing vpn_log_dt or create empty if not exists
+  if (file.exists(vpn_log_file)) {
+    vpn_log_dt <- readRDS(vpn_log_file)
+  } else {
+    vpn_log_dt <- data.table(
+      id = integer(),
+      ip_address = character(),
+      type = character(),
+      first_used = as.POSIXct(character()),
+      last_used = as.POSIXct(character()),
+      total_requests = integer(),
+      blocked_by_domain = list()
+    )
+  }
   
   # Get current system time for timestamps
   current_time <- Sys.time()
   
-  # Try to get VPN IP address via https://ifconfig.me/ip
-  # Use httr::GET to avoid issues and trim whitespace
+  # Retrieve VPN IP address via https://ifconfig.me/ip
   res <- httr::GET("https://ifconfig.me/ip")
   if (res$status_code == 200) {
     vpn_ip_address <- trimws(httr::content(res, "text", encoding = "UTF-8"))
@@ -161,7 +195,7 @@ update_vpn_ip_in_vpn_log <- function(vpn_log_dt) {
       first_used = current_time,
       last_used = current_time,
       total_requests = 0L,
-      blocked_by_domain = list(character(0)) # empty list column
+      blocked_by_domain = list(character(0))
     )
     
     # Append new row to vpn_log_dt
@@ -177,10 +211,8 @@ update_vpn_ip_in_vpn_log <- function(vpn_log_dt) {
     if (ip_type == "personal") {
       warning("Warning: Personal VPN. Do not use this address.")
     } else if (ip_type == "vpn") {
-      # Basic info message
       message(sprintf('Address "%s" Known. This address has been used for %d total requests.', vpn_ip_address, total_requests))
       
-      # If blocked domains not empty, print extra warning
       if (length(blocked_domains) > 0) {
         warning(sprintf("VPN has been blocked by %d domains.", length(blocked_domains)))
       }
@@ -190,16 +222,20 @@ update_vpn_ip_in_vpn_log <- function(vpn_log_dt) {
     vpn_log_dt[existing_row_idx, last_used := current_time]
   }
   
-  paths <- get_module_paths()
-  vpn_log_file <- file.path(paths$logs, "03_vpn_log.rds")
+  # Save the updated vpn_log_dt back to the RDS file
   saveRDS(vpn_log_dt, vpn_log_file)
   
-  return(vpn_log_dt)
+  # Return invisibly to avoid printing large tables
+  invisible(vpn_log_dt)
 }
 
-vpn_log_dt <- update_vpn_ip_in_vpn_log(vpn_log_dt)
+# calling the function: 
+# func_03_initialzie_vpn_connnection()
+
 
 ###### 
+
+# to do: update vpn function, that takes total requests and blocked domains
 
 
 

@@ -17,6 +17,10 @@
 # - 10_storage_manager: Successfully parsed articles (data.table)
 # - 08_retry_manager: Failed parses with HTML for reprocessing
 #
+# USAGE:
+# 1. First run: Execute traffic-heavy setup functions once
+# 2. Subsequent runs: Comment out setup calls, use initialize_html_parser()
+#
 # ==============================================================================
 
 # Load required packages
@@ -39,15 +43,13 @@ get_module_paths <- function() {
   )
 }
 
-
 # 1. SETUP: Load and prepare paywall domain data
-
 setup_paywall_domains <- function() {
   paths <- get_module_paths()
   
   # Load CSV and convert to RDS
   paywall_csv_path <- file.path(paths$input, "paywall_domains.csv")
-  paywall_rds_path <- file.path(paths$config, "06_html_parser_paywall_domains.rds")
+  paywall_rds_path <- file.path(paths$logs, "paywall_domains_processed.rds")
   
   if (file.exists(paywall_csv_path)) {
     # Read CSV with semicolon separator and header
@@ -73,18 +75,15 @@ setup_paywall_domains <- function() {
       }
     }
     
-    # Save as RDS
+    # Save processed data to logs directory
     saveRDS(paywall_data, paywall_rds_path)
-    message("Paywall domains saved to RDS: ", paywall_rds_path)
+    message("Paywall domains processed and saved to: ", paywall_rds_path)
     
     return(paywall_data)
   } else {
     stop("Paywall domains CSV not found at: ", paywall_csv_path)
   }
 }
-
-
-# 2: Extract parser rules from paperboy repository
 
 # Function to transform domain to GitHub filename
 domain_to_paperboy_filename <- function(domain) {
@@ -160,7 +159,7 @@ extract_paperboy_rules <- function(script_content, domain) {
   ))
 }
 
-# Main function to fetch and process all parser rules
+# Main function to fetch and process all parser rules (TRAFFIC-HEAVY)
 fetch_parser_rules <- function(domains) {
   paths <- get_module_paths()
   parser_rules <- list()
@@ -198,19 +197,18 @@ fetch_parser_rules <- function(domains) {
     }
   }
   
-  # Save parser rules
-  saveRDS(parser_rules, file.path(paths$config, "06_html_parser_rules.rds"))
+  # Save parser rules to logs directory
+  parser_rules_path <- file.path(paths$logs, "parser_rules_fetched.rds")
+  saveRDS(parser_rules, parser_rules_path)
   
   message(sprintf("Parser rules extracted for %d domains, %d failed", 
                   processed_count, failed_count))
+  message("Parser rules saved to: ", parser_rules_path)
   
   return(parser_rules)
 }
 
-
-# 3: Paywall detection setup (TO-DO: Full implementation)
-
-# Placeholder for paywall detection rule generation
+# Generate paywall detection rules
 generate_paywall_rules <- function(paywall_data) {
   paths <- get_module_paths()
   
@@ -245,26 +243,63 @@ generate_paywall_rules <- function(paywall_data) {
     }
   }
   
-  # Save paywall rules
-  saveRDS(paywall_rules, file.path(paths$config, "06_html_parser_paywall_rules.rds"))
+  # Save paywall rules to logs directory
+  paywall_rules_path <- file.path(paths$logs, "paywall_rules_generated.rds")
+  saveRDS(paywall_rules, paywall_rules_path)
   
   message("Paywall rules generated (basic implementation)")
+  message("Paywall rules saved to: ", paywall_rules_path)
   
   return(paywall_rules)
 }
 
 
-# 4: Main parser functions
+# Execute traffic-heavy setup functions once
+run_initial_setup <- function() {
+  message("Running initial setup - this will generate network traffic...")
+  
+  # Setup paywall domains
+  paywall_data <- setup_paywall_domains()
+  
+  # Get unique domains
+  unique_domains <- unique(paywall_data$domain)
+  unique_domains <- unique_domains[!is.na(unique_domains) & unique_domains != ""]
+  
+  message(sprintf("Found %d unique domains", length(unique_domains)))
+  
+  # Fetch parser rules from paperboy (TRAFFIC-HEAVY)
+  parser_rules <- fetch_parser_rules(unique_domains)
+  
+  # Generate paywall rules
+  paywall_rules <- generate_paywall_rules(paywall_data)
+  
+  message("Initial setup completed successfully")
+  message("You can now comment out the call to run_initial_setup() and use initialize_html_parser()")
+  
+  return(list(
+    parser_rules = parser_rules,
+    paywall_rules = paywall_rules,
+    paywall_data = paywall_data
+  ))
+}
 
-# Load rules (called once at module initialization)
+# Comment out after first run 
+# run_initial_setup()
+rm(run_initial_setup, setup_paywall_domains,fetch_parser_rules, generate_paywall_rules, domain_to_paperboy_filename, extract_paperboy_rules)
+
+
+# MAIN PARSER FUNCTIONS (LOAD FROM SAVED DATA, NO TRAFFIC)
+
+# Load rules from saved RDS files (no network traffic)
 .load_parser_rules <- function() {
   paths <- get_module_paths()
   
-  parser_rules_file <- file.path(paths$config, "06_html_parser_rules.rds")
-  paywall_rules_file <- file.path(paths$config, "06_html_parser_paywall_rules.rds")
+  # Load from logs directory where setup functions saved the data
+  parser_rules_file <- file.path(paths$logs, "parser_rules_fetched.rds")
+  paywall_rules_file <- file.path(paths$logs, "paywall_rules_generated.rds")
   
   if (!file.exists(parser_rules_file) || !file.exists(paywall_rules_file)) {
-    stop("Parser rules not found. Run setup functions first.")
+    stop("Parser rules not found. Run run_initial_setup() first to generate the rules.")
   }
   
   list(
@@ -315,8 +350,8 @@ generate_paywall_rules <- function(paywall_data) {
   return(FALSE)
 }
 
-# Main parser function
-parse_html <- function(html_content, url, rules = NULL) {
+# Single HTML parsing function
+func_06_parse_html <- function(html_content, url, rules = NULL) {
   # Load rules if not provided
   if (is.null(rules)) {
     rules <- .load_parser_rules()
@@ -412,7 +447,7 @@ parse_html <- function(html_content, url, rules = NULL) {
 }
 
 # Batch processing function
-parse_html_batch <- function(html_list, url_list, rules = NULL) {
+func_06_parse_html_batch <- function(html_list, url_list, rules = NULL) {
   if (length(html_list) != length(url_list)) {
     stop("HTML and URL lists must have same length")
   }
@@ -424,7 +459,7 @@ parse_html_batch <- function(html_list, url_list, rules = NULL) {
   
   # Process all items
   results <- mapply(function(html, url) {
-    parse_html(html, url, rules)
+    func_06_parse_html(html, url, rules)
   }, html_list, url_list, SIMPLIFY = FALSE)
   
   # Separate successful and failed
@@ -446,35 +481,47 @@ parse_html_batch <- function(html_list, url_list, rules = NULL) {
 }
 
 
-# 5. Module initialization 
+# MODULE INITIALIZATION 
 
-# This function should be called once to initialize the module
+# This function loads pre-generated rules and initializes parsing functions
 initialize_html_parser <- function() {
-  message("Initializing HTML Parser Module...")
+  message("Initializing HTML Parser Module (loading from saved data)...")
   
-  # Setup paywall domains
-  paywall_data <- setup_paywall_domains()
+  # Check if required data files exist
+  paths <- get_module_paths()
+  required_files <- c(
+    file.path(paths$logs, "paywall_domains_processed.rds"),
+    file.path(paths$logs, "parser_rules_fetched.rds"),
+    file.path(paths$logs, "paywall_rules_generated.rds")
+  )
   
-  # Get unique domains
-  unique_domains <- unique(paywall_data$domain)
-  unique_domains <- unique_domains[!is.na(unique_domains) & unique_domains != ""]
+  missing_files <- required_files[!file.exists(required_files)]
   
-  message(sprintf("Found %d unique domains", length(unique_domains)))
+  if (length(missing_files) > 0) {
+    stop("Missing required data files. Run run_initial_setup() first.\nMissing files:\n", 
+         paste(missing_files, collapse = "\n"))
+  }
   
-  # Fetch parser rules from paperboy
-  parser_rules <- fetch_parser_rules(unique_domains)
+  # Load rules (this is fast, no network traffic)
+  rules <- .load_parser_rules()
   
-  # Generate paywall rules
-  paywall_rules <- generate_paywall_rules(paywall_data)
+  # Get some stats from loaded data
+  parser_count <- length(rules$parser)
+  paywall_count <- length(rules$paywall)
   
-  message("HTML Parser Module initialized successfully")
+  message(sprintf("HTML Parser Module initialized successfully"))
+  message(sprintf("Loaded %d parser rules and %d paywall rules", parser_count, paywall_count))
   
   return(list(
-    parser_rules = parser_rules,
-    paywall_rules = paywall_rules
+    parser_rules = rules$parser,
+    paywall_rules = rules$paywall,
+    stats = list(
+      parser_count = parser_count,
+      paywall_count = paywall_count
+    )
   ))
 }
 
-# Execute
-
-initialize_html_parser()  
+# Execute initialization 
+initialize_html_parser()
+rm(initialize_html_parser)

@@ -34,7 +34,7 @@ get_module_paths <- function() {
 }
 
 # 1: Defining the chunk builder function
-build_chunk <- function(chunk_proportion    = 1 / 10,
+func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
                         absolute_links      = NULL,
                         exclude_domains     = NULL,
                         exclude_retry_links = FALSE,
@@ -113,8 +113,8 @@ build_chunk <- function(chunk_proportion    = 1 / 10,
 }
 
 # Calling the function: 
-# build_chunk()
-# build_chunk(chunk_proportion    = 1 / 20, absolute_links = 300, exclude_domains = "", exclude_retry_links = TRUE, seed = 1 )
+# func_02_build_chunk()
+# func_02_build_chunk(chunk_proportion    = 1 / 20, absolute_links = 300, exclude_domains = "", exclude_retry_links = TRUE, seed = 1 )
 # chunk_01 <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/chunks/chunk_01.rds")
 
 ##### 
@@ -124,7 +124,7 @@ build_chunk <- function(chunk_proportion    = 1 / 10,
 #   – all unprocessed links,
 #   – a provided chunk.
 
-plot_chunk_overview <- function(chunk,
+func_02_plot_chunk_overview <- function(chunk,
                                 input_path = file.path(get_module_paths()$input,
                                                        "input.rds")) {
   # accept data.table/data.frame or file name
@@ -162,3 +162,4 @@ plot_chunk_overview <- function(chunk,
 }
 
 # plot_chunk_overview(chunk_01)
+

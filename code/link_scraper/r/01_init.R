@@ -78,6 +78,7 @@ init_input_dataset <- function(paths) {
 # initialize, create and load 
 paths <- get_module_paths()
 init_input_dataset(paths)
+rm(init_input_dataset)
 # input_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/input.rds")
 
 ##### 
@@ -127,6 +128,7 @@ init_final_output_dataset <- function(paths) {
 
 # initialize, create and load 
 init_final_output_dataset(paths)
+rm(init_final_output_dataset)
 # final_output_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/output/final_data.rds")
 
 ###### 
