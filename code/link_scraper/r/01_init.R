@@ -15,6 +15,7 @@
 # Load required packages
 library(data.table)
 library(readxl)
+library(httr)
 
 
 # Path Configuration Function
@@ -74,19 +75,27 @@ test_data_structure <- function(dt_name) {
   }
   
   # Load the data file
-  dt <- readRDS(file_path)
+  loaded_data <- readRDS(file_path)
   
-  if (!is.data.table(dt)) {
-    stop("Loaded file is not a data.table")
+  # Check if it's a list (like header_params) or data.table
+  is_list_structure <- is.list(loaded_data) && !is.data.table(loaded_data)
+  
+  if (!is.data.table(loaded_data) && !is_list_structure) {
+    stop("Loaded file is neither a data.table nor a list")
   }
   
-  # Columns to ignore in the check (now we don't ignore "path" since we use it)
+  # Get column/element names based on structure type
+  if (is_list_structure) {
+    dt_colnames <- names(loaded_data)
+  } else {
+    dt_colnames <- colnames(loaded_data)
+  }
+  
+  # Columns to ignore in the check
   ignore_cols <- c("col_name")
   
   # Filter expected columns (exclude ignored and path)
   expected_cols_filtered <- codebook_dt[!col_name %in% c(ignore_cols, "path"), col_name]
-  
-  dt_colnames <- colnames(dt)
   
   colname_messages <- character()
   
@@ -108,6 +117,7 @@ test_data_structure <- function(dt_name) {
   
   # Map R types to simplified type names
   map_type <- function(x) {
+    if (is.list(x) && !is.data.frame(x)) return("list")
     if (inherits(x, "integer")) return("int")
     if (inherits(x, "numeric") | inherits(x, "double")) return("num")
     if (inherits(x, "character")) return("char")
@@ -122,7 +132,11 @@ test_data_structure <- function(dt_name) {
     if (!(col %in% dt_colnames)) next
     if (col %in% c(ignore_cols, "path")) next
     
-    actual_type <- map_type(dt[[col]])
+    if (is_list_structure) {
+      actual_type <- map_type(loaded_data[[col]])
+    } else {
+      actual_type <- map_type(loaded_data[[col]])
+    }
     expected_type <- codebook_dt$variable_type[i]
     
     if (actual_type != expected_type) {
@@ -131,30 +145,41 @@ test_data_structure <- function(dt_name) {
     }
   }
   
+  # Skip valid values check for list structures (they have nested values)
   validvals_messages <- character()
-  for (i in seq_len(nrow(codebook_dt))) {
-    col <- codebook_dt$col_name[i]
-    if (!(col %in% dt_colnames)) next
-    if (col %in% c(ignore_cols, "path")) next
-    
-    valid_values_raw <- codebook_dt$valid_values[i]
-    if (is.na(valid_values_raw) || valid_values_raw == "") next
-    
-    valid_values_list <- str_trim(unlist(strsplit(valid_values_raw, ";")))
-    actual_values <- unique(as.character(dt[[col]]))
-    invalid_values <- setdiff(actual_values, valid_values_list)
-    
-    if (length(invalid_values) > 0) {
-      invalid_values_msg <- paste(invalid_values, collapse = "\n")
-      validvals_messages <- c(validvals_messages,
-                              paste0('column "', col, '" (', i, '): unexpected values found:\n', invalid_values_msg))
+  if (!is_list_structure) {
+    for (i in seq_len(nrow(codebook_dt))) {
+      col <- codebook_dt$col_name[i]
+      if (!(col %in% dt_colnames)) next
+      if (col %in% c(ignore_cols, "path")) next
+      
+      valid_values_raw <- codebook_dt$valid_values[i]
+      if (is.na(valid_values_raw) || valid_values_raw == "") next
+      
+      valid_values_list <- str_trim(unlist(strsplit(valid_values_raw, ";")))
+      actual_values <- unique(as.character(loaded_data[[col]]))
+      invalid_values <- setdiff(actual_values, valid_values_list)
+      
+      if (length(invalid_values) > 0) {
+        invalid_values_msg <- paste(invalid_values, collapse = "\n")
+        validvals_messages <- c(validvals_messages,
+                                paste0('column "', col, '" (', i, '): unexpected values found:\n', invalid_values_msg))
+      }
     }
+  } else {
+    validvals_messages <- "Valid values check skipped for list structure"
   }
   
   # Print results
   cat("Testing data structure for:", dt_name, "\n")
   cat("File path:", file_path, "\n")
-  cat("Data dimensions:", nrow(dt), "rows x", ncol(dt), "columns\n\n")
+  cat("Data type:", ifelse(is_list_structure, "list", "data.table"), "\n")
+  
+  if (is_list_structure) {
+    cat("List elements:", length(dt_colnames), "\n\n")
+  } else {
+    cat("Data dimensions:", nrow(loaded_data), "rows x", ncol(loaded_data), "columns\n\n")
+  }
   
   cat("col_names:\n")
   if (length(colname_messages) == 0) {
@@ -171,14 +196,18 @@ test_data_structure <- function(dt_name) {
   }
   
   cat("valid_values:\n")
-  if (length(validvals_messages) == 0) {
-    cat("all values correct\n")
+  if (is_list_structure) {
+    cat(validvals_messages, "\n")
   } else {
-    cat(paste0(validvals_messages, collapse = "\n"), "\n")
+    if (length(validvals_messages) == 0) {
+      cat("all values correct\n")
+    } else {
+      cat(paste0(validvals_messages, collapse = "\n"), "\n")
+    }
   }
   
-  # Clean up: remove the loaded data table from memory
-  rm(dt)
+  # Clean up: remove the loaded data from memory
+  rm(loaded_data)
   
   # Return invisibly (for potential further use)
   return(invisible(TRUE))
@@ -772,3 +801,419 @@ rm(list = c("get_module_paths", "generate_user_agent", "create_user_agents_table
             "save_user_agents", "test_user_agents"))
 
 
+
+#####
+
+
+# 5. Initialize parse error dataset if not existing 
+init_parse_error_dataset <- function(paths) {
+  # Define the full parse error file path
+  parse_error_path <- file.path(paths$input, "parse_error.rds")
+  
+  # Check if parse_error.rds already exists to avoid overwriting
+  if (file.exists(parse_error_path)) {
+    message("Parse error dataset already exists at ", parse_error_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  parse_error <- data.table(
+    id = integer(),                # integer (to match input id)
+    domain = character(),          # character (cleaned domain from input)
+    url = character(),             # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
+    date_time = character(),       # character (extracted date/time from content)
+    author = character(),          # character (extracted author information)
+    headline = character(),        # character (extracted headline/title)
+    text = character(),            # character (extracted text content)
+    paywall = logical(),           # logical (paywall detection flag)
+    html_content = character()     # character (raw HTML content for debugging)
+  )
+  
+  # Save the empty dataset as RDS file to the input path
+  saveRDS(parse_error, parse_error_path)
+  
+  message("Parse error dataset successfully created and saved to ", parse_error_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create parse error dataset
+init_parse_error_dataset(paths)
+
+# Test parse error dataset structure
+test_data_structure("parse_error_ds")
+
+# Clean up environment
+rm(init_parse_error_dataset)
+
+# Load if wanted 
+# parse_error_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/parse_error.rds")
+
+
+
+#####
+
+
+# 6. Initialize retry dataset if not existing 
+init_retry_dataset <- function(paths) {
+  # Define the full retry file path
+  retry_path <- file.path(paths$input, "retry.rds")
+  
+  # Check if retry.rds already exists to avoid overwriting
+  if (file.exists(retry_path)) {
+    message("Retry dataset already exists at ", retry_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  retry <- data.table(
+    id = integer(),                # integer (to match input id)
+    domain = character(),          # character (cleaned domain from input)
+    url = character(),             # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
+    from_chunk = integer(),        # integer (chunk number for batch tracking)
+    status_code = integer(),       # integer (HTTP status code)
+    response_headers = list(),     # list (all response headers for analysis)
+    response_body = character(),   # character (raw response body content)
+    response_time = numeric(),     # numeric (response time in seconds)
+    retry_reason = character(),    # character (reason for retry requirement)
+    server_date = as.POSIXct(character()),  # POSIXct (server date from Date header)
+    content_type = character(),    # character (content type from headers)
+    content_length = integer(),    # integer (content length from headers or calculated)
+    server = character(),          # character (server information from headers)
+    user_agent_id = integer(),     # integer (user agent used for request)
+    ip_address = character(),      # character (IP/VPN address used)
+    dns_time = numeric(),          # numeric (DNS lookup time in seconds)
+    connect_time = numeric(),      # numeric (connection establishment time in seconds)
+    total_time = numeric(),        # numeric (total request time in seconds)
+    curl_error_code = integer(),   # integer (curl error code for low-level errors)
+    ssl_verify_result = integer(), # integer (SSL verification result code)
+    redirect_count = integer(),    # integer (number of redirects followed)
+    rate_limit_remaining = integer(),  # integer (remaining rate limit from headers)
+    rate_limit_reset = as.POSIXct(character()),  # POSIXct (rate limit reset time)
+    retry_after = integer()        # integer (retry after seconds from headers)
+  )
+  
+  # Save the empty dataset as RDS file to the input path
+  saveRDS(retry, retry_path)
+  
+  message("Retry dataset successfully created and saved to ", retry_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create retry dataset
+init_retry_dataset(paths)
+
+# Test retry dataset structure
+test_data_structure("retry_ds")
+
+# Clean up environment
+rm(init_retry_dataset)
+
+# Load if wanted 
+# retry_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/retry.rds")
+
+
+
+#####
+
+
+
+# 7. Initialize request log dataset if not existing 
+init_request_log_dataset <- function(paths) {
+  # Define the full request log file path
+  request_log_path <- file.path(paths$logs, "request_log.rds")
+  
+  # Check if request_log.rds already exists to avoid overwriting
+  if (file.exists(request_log_path)) {
+    message("Request log dataset already exists at ", request_log_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  request_log <- data.table(
+    id = integer(),                # integer (to match input id)
+    domain = character(),          # character (cleaned domain from input)
+    url = character(),             # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
+    from_chunk = integer(),        # integer (chunk number for batch tracking)
+    user_agent_id = integer(),     # integer (user agent used for request)
+    ip_address = character()       # character (IP/VPN address used)
+  )
+  
+  # Save the empty dataset as RDS file to the input path
+  saveRDS(request_log, request_log_path)
+  
+  message("Request log dataset successfully created and saved to ", request_log_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create request log dataset
+init_request_log_dataset(paths)
+
+# Test request log dataset structure
+test_data_structure("request_log_ds")
+
+# Clean up environment
+rm(init_request_log_dataset)
+
+# Load if wanted 
+# request_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/request_log.rds")
+
+
+
+##### 
+
+
+
+# 8. Initialize response log dataset if not existing 
+init_response_log_dataset <- function(paths) {
+  # Define the full response log file path
+  response_log_path <- file.path(paths$logs, "response_log.rds")
+  
+  # Check if response_log.rds already exists to avoid overwriting
+  if (file.exists(response_log_path)) {
+    message("Response log dataset already exists at ", response_log_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  response_log <- data.table(
+    id = integer(),                # integer (to match input id)
+    domain = character(),          # character (cleaned domain from input)
+    url = character(),             # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
+    from_chunk = integer(),        # integer (chunk number for batch tracking)
+    status_code = integer(),       # integer (HTTP status code)
+    response_headers = list(),     # list (all response headers for analysis)
+    response_body = character(),   # character (raw response body content)
+    response_time = numeric(),     # numeric (response time in seconds)
+    server_date = as.POSIXct(character()),  # POSIXct (server date from Date header)
+    content_type = character(),    # character (content type from headers)
+    content_length = integer(),    # integer (content length from headers or calculated)
+    server = character(),          # character (server information from headers)
+    user_agent_id = integer(),     # integer (user agent used for request)
+    ip_address = character(),      # character (IP/VPN address used)
+    dns_time = numeric(),          # numeric (DNS lookup time in seconds)
+    connect_time = numeric(),      # numeric (connection establishment time in seconds)
+    total_time = numeric(),        # numeric (total request time in seconds)
+    curl_error_code = integer(),   # integer (curl error code for low-level errors)
+    ssl_verify_result = integer(), # integer (SSL verification result code)
+    redirect_count = integer(),    # integer (number of redirects followed)
+    rate_limit_remaining = integer(),  # integer (remaining rate limit from headers)
+    rate_limit_reset = as.POSIXct(character()),  # POSIXct (rate limit reset time)
+    retry_after = integer()        # integer (retry after seconds from headers)
+  )
+  
+  # Save the empty dataset as RDS file to the input path
+  saveRDS(response_log, response_log_path)
+  
+  message("Response log dataset successfully created and saved to ", response_log_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create response log dataset
+init_response_log_dataset(paths)
+
+# Test response log dataset structure
+test_data_structure("response_log_ds")
+
+# Clean up environment
+rm(init_response_log_dataset)
+
+# Load if wanted 
+# response_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/response_log.rds")
+
+
+
+######
+
+
+
+# 9. Initialize header parameters if not existing
+init_header_params <- function(paths) {
+  # Define the full header params file path
+  header_params_path <- file.path(paths$input, "header_params.rds")
+  
+  # Check if header_params.rds already exists to avoid overwriting
+  if (file.exists(header_params_path)) {
+    message("Header params dataset already exists at ", header_params_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  message("Creating header parameters dataset...")
+  
+  # Initialize empty header_params structure as nested list
+  header_params <- list(
+    accept = list(),
+    accept_language = list(),
+    accept_encoding = list(),
+    cross_site_referer = list(),
+    same_site_referer = list(),
+    host = list(),
+    upgrade_insecure_requests = list(),
+    sec_fetch_dest = list(),
+    sec_fetch_mode = list(),
+    sec_fetch_site = list()
+  )
+  
+  # Load original input to get unique domains
+  original_input_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/all_links_filtered_by_date.rds"
+  
+  if (!file.exists(original_input_path)) {
+    stop("Original input file not found at: ", original_input_path)
+  }
+  
+  # Read the original input
+  original_input <- readRDS(original_input_path)
+  setDT(original_input)
+  
+  # Get unique domain URLs
+  unique_domains <- unique(original_input$domain_url)
+  unique_domains <- unique_domains[!is.na(unique_domains) & unique_domains != ""]
+  
+  message(sprintf("Found %d unique domains", length(unique_domains)))
+  
+  # Fetch same-site referers for each domain
+  message("Fetching same-site referers...")
+  
+  for (i in seq_along(unique_domains)) {
+    domain_url <- unique_domains[i]
+    
+    # Clean domain for storage key (do this first for consistency)
+    clean_domain <- sub("^https?://(?:www\\.)?", "", domain_url)
+    clean_domain <- sub("/.*$", "", clean_domain)
+    
+    # Progress indicator
+    if (i %% 10 == 0) {
+      message(sprintf("Processing domain %d/%d", i, length(unique_domains)))
+    }
+    
+    tryCatch({
+      # Ensure URL has protocol
+      if (!grepl("^https?://", domain_url)) {
+        domain_url <- paste0("https://", domain_url)
+      }
+      
+      # Send GET request to the domain
+      response <- httr::GET(
+        url = domain_url,
+        httr::timeout(10),
+        httr::user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+      )
+      
+      # Get the final URL after redirects
+      final_url <- response$url
+      
+      # Store in the list with domain as key
+      header_params$same_site_referer[[clean_domain]] <- final_url
+      
+      # Add small delay to avoid rate limiting
+      Sys.sleep(runif(1, 0.5, 1.5))
+      
+    }, error = function(e) {
+      # If request fails, use basic construction
+      constructed_url <- paste0("https://", clean_domain, "/")
+      header_params$same_site_referer[[clean_domain]] <- constructed_url
+      message(sprintf("Failed to fetch %s, using constructed URL: %s", clean_domain, constructed_url))
+    })
+  }
+  
+  message("Completed fetching same-site referers")
+  
+  # Manually add missing domains for bild and bnn 
+  if (!"bild.de" %in% names(header_params$same_site_referer)) {
+    header_params$same_site_referer[["bild.de"]] <- "https://bild.de/"
+    message("Manually added bild.de")
+  }
+  
+  if (!"br.de" %in% names(header_params$same_site_referer)) {
+    header_params$same_site_referer[["br.de"]] <- "https://br.de/"
+    message("Manually added br.de")
+  }
+  
+  # Set Accept headers with browser-specific options
+  header_params$accept <- list(
+    chrome_option_1 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    chrome_option_2 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+    firefox_option_1 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    firefox_option_2 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    safari_option_1 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    safari_option_2 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    edge_option_1 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+  )
+  
+  # Set Accept-Language headers with German preference
+  header_params$accept_language <- list(
+    german_primary_1 = "de-DE,de;q=0.9,en;q=0.8",
+    german_primary_2 = "de,en-US;q=0.7,en;q=0.3",
+    german_primary_3 = "de-DE,de;q=0.8,en-US;q=0.5,en;q=0.3",
+    german_english_1 = "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+    german_english_2 = "de-DE,en;q=0.9",
+    chrome_german = "de-DE,de;q=0.9,en;q=0.8",
+    firefox_german = "de,en-US;q=0.7,en;q=0.3",
+    safari_german = "de-DE,de;q=0.9"
+  )
+  
+  # Set Accept-Encoding headers
+  header_params$accept_encoding <- list(
+    modern_full = "gzip, deflate, br, zstd",
+    modern_standard = "gzip, deflate, br",
+    legacy_standard = "gzip, deflate",
+    chrome_standard = "gzip, deflate, br",
+    firefox_standard = "gzip, deflate, br",
+    safari_standard = "gzip, deflate, br"
+  )
+  
+  # Set Cross-site referer URLs
+  header_params$cross_site_referer <- list(
+    google = "https://www.google.com/",
+    facebook = "https://www.facebook.com/",
+    linkedin = "https://www.linkedin.com/",
+    instagram = "https://www.instagram.com/"
+  )
+  
+  # Set Host headers (same as unique domains, cleaned)
+  for (domain in unique_domains) {
+    clean_domain <- sub("^https?://(?:www\\.)?", "", domain)
+    clean_domain <- sub("/.*$", "", clean_domain)
+    header_params$host[[clean_domain]] <- clean_domain
+  }
+  
+  # Set static headers
+  header_params$upgrade_insecure_requests <- list(
+    default = "1"
+  )
+  
+  header_params$sec_fetch_dest <- list(
+    default = "document"
+  )
+  
+  header_params$sec_fetch_mode <- list(
+    default = "navigate"
+  )
+  
+  header_params$sec_fetch_site <- list(
+    cross_site = "cross-site",
+    same_site = "same-site"
+  )
+  
+  # Save the header params dataset as RDS file
+  saveRDS(header_params, header_params_path)
+  
+  message("Header params dataset successfully created and saved to ", header_params_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create header params
+init_header_params(paths)
+
+# Test header params dataset structure
+test_data_structure("header_params_ds")
+
+# Clean up environment
+rm(init_header_params)
+
+# Load if wanted 
+# header_params <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/header_params.rds")

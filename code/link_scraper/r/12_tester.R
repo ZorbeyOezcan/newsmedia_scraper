@@ -22,6 +22,7 @@
 library(data.table)
 library(testthat)
 library(stringr)
+library(httr2)
 
 
 # Configuration Function
