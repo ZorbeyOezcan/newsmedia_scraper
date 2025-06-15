@@ -15,8 +15,8 @@ func_02_build_chunk()
 
 # Loading chunk 
 chunk <<- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/chunks/chunk_01.rds")
+input <<- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/input.rds")
 
 # Getting Chunk overview
 func_02_plot_chunk_overview("chunk_01")
-
 

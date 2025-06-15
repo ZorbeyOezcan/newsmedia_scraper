@@ -34,44 +34,10 @@ get_module_paths <- function() {
   )
 }
 
-# 1: Initializing the VPN log file as rds. 
-create_vpn_log <- function() {
-  # Retrieve paths configuration
-  paths <- get_module_paths()
-  
-  # Define the filename for the vpn log RDS file
-  vpn_log_file <- file.path(paths$logs, "03_vpn_log.rds")
-  
-  # Check if vpn log file already exists to load it
-  if (file.exists(vpn_log_file)) {
-    # Load existing vpn log data table
-    vpn_log <- readRDS(vpn_log_file)
-  } else {
-    # Create new empty vpn log data.table with defined columns
-    vpn_log <- data.table(
-      id = integer(),               # unique identifier for VPN entry
-      ip_address = character(),     # VPN IP address string
-      type = character(),           # type/category of VPN (personal / vpn)
-      first_used = as.POSIXct(character()), # timestamp of first log
-      last_used = as.POSIXct(character()),  # timestamp of last update
-      total_requests = integer(),   # counter of total requests made
-      blocked_by_domain = list()    # list of domains that blocked this vpn. 
-    )
-    
-    # Save the new empty vpn log data.table as RDS file
-    saveRDS(vpn_log, vpn_log_file)
-  }
-  
-  # Return the vpn log data.table for further use
-  return(vpn_log)
-}
 
-vpn_log_dt <- create_vpn_log()
-rm(create_vpn_log)
 
-######
 
-# 2: Function to add or update personal IP address entry in the vpn log data.table
+# 1: Function to add or update personal IP address entry in the vpn log data.table
 ## Execute without active VPN
 func_03_update_personal_ip_in_vpn_log <- function(vpn_log_dt) {
   
@@ -124,9 +90,13 @@ func_03_update_personal_ip_in_vpn_log <- function(vpn_log_dt) {
 
 # vpn_log_dt <- func_03_update_personal_ip_in_vpn_log(vpn_log_dt)
 
+
+
 ######
 
-# 3: Function to add or update VPN IP address entry in the vpn log data.table
+
+
+# 2: Function to add or update VPN IP address entry in the vpn log data.table
 ## Execute with active VPN
 func_03_initialzie_vpn_connnection <- function() {
   
@@ -229,21 +199,22 @@ func_03_initialzie_vpn_connnection <- function() {
   invisible(vpn_log_dt)
 }
 
+
 # calling the function: 
 # func_03_initialzie_vpn_connnection()
 
 
+
 ###### 
 
+
+
 # to do: update vpn function, that takes total requests and blocked domains
+# 3: update vpn function 
 
 
 
-
-
-
-
-
+######
 
 
 
