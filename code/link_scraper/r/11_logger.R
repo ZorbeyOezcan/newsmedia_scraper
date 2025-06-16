@@ -16,9 +16,8 @@
 # ==============================================================================
 
 # Load required packages
-suppressPackageStartupMessages({
-  library(here)
-})
+library(data.table)
+library(httr2)
 
 # Configuration Function
 get_module_paths <- function() {
@@ -31,3 +30,4 @@ get_module_paths <- function() {
     logs = file.path(base_path, "data", "logs")
   )
 }
+

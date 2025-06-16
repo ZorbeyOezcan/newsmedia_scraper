@@ -16,6 +16,7 @@
 library(data.table)
 library(readxl)
 library(httr)
+library(stringr)
 
 
 # Path Configuration Function
@@ -239,13 +240,7 @@ init_input_dataset <- function(paths) {
   
   # Helper function to clean domains from URLs, remove 'www.' and TLDs (.de, .com, etc.)
   .extract_domain <- function(url) {
-    # Remove protocol and www.
-    domain <- sub("^https?://(?:www\\.)?", "", url)
-    # Remove everything after first slash
-    domain <- sub("/.*$", "", domain)
-    # Remove TLD by cutting from last dot to end
-    domain <- sub("\\.[^.]+$", "", domain)
-    domain
+    url
   }
   
   # Create the new input dataset with cleaned domain and initialized flags
@@ -254,7 +249,11 @@ init_input_dataset <- function(paths) {
     domain = .extract_domain(domain_url),  # cleaned domain
     url = result_link,
     processed = FALSE,             # initialize as FALSE
-    retry = FALSE                 # initialize as FALSE
+    total_requests = 0L,           # initialize as 0
+    retry = FALSE,                 # initialize as FALSE
+    parse_error = FALSE,          # initialize as FALSE
+    error = FALSE                  # initialize as FALSE
+    
   )]
   
   # Save the new input dataset as input.rds
@@ -797,12 +796,13 @@ test_user_agents <- function() {
 test_user_agents()
 
 # Clean up environment - remove all created variables and functions
-rm(list = c("get_module_paths", "generate_user_agent", "create_user_agents_table",
-            "save_user_agents", "test_user_agents"))
+rm("generate_user_agent", "create_user_agents_table",
+            "save_user_agents", "test_user_agents")
 
 
 
 #####
+
 
 
 # 5. Initialize parse error dataset if not existing 
@@ -1217,3 +1217,46 @@ rm(init_header_params)
 
 # Load if wanted 
 # header_params <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/header_params.rds")
+
+
+
+#####
+
+
+
+# 10: Initialize error dataset if not existing
+init_error_dataset <- function(paths) {
+  # Define the full error file path
+  error_path <- file.path(paths$output, "error.rds")
+  
+  # Check if error.rds already exists to avoid overwriting
+  if (file.exists(error_path)) {
+    message("'error.rds' already exists at ", error_path, ". Skipping creation.")
+    return(invisible(TRUE))
+  }
+  
+  # Create empty error dataset with defined structure
+  error <- data.table(
+    id = integer(),           # integer (to match input id)
+    domain = character(),     # character (cleaned domain from input)
+    url = character(),        # character (URL from input)
+    error_reason = character() # character (specific error description)
+  )
+  
+  # Save the empty dataset as RDS file to the input path
+  saveRDS(error, error_path)
+  
+  message("Error dataset successfully created and saved to ", error_path)
+  
+  return(invisible(TRUE))
+}
+
+# Create error dataset
+init_error_dataset(paths)
+
+# Test error ds
+test_data_structure("error_ds")
+
+# Clean up environment
+rm("init_error_dataset", "paths")
+

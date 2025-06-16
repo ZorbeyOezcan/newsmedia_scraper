@@ -365,10 +365,6 @@ func_03_create_session <- function(domain, user_agent_id) {
     status = "active"
   )
   
-  # Log session creation
-  message(sprintf("Session created: %s for domain %s with %s", 
-                  session_id, domain, browser_type))
-  
   return(session)
 }
 

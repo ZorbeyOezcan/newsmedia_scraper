@@ -269,7 +269,6 @@ run_initial_setup <- function() {
   paywall_rules <- generate_paywall_rules(paywall_data)
   
   message("Initial setup completed successfully")
-  message("You can now comment out the call to run_initial_setup() and use initialize_html_parser()")
   
   return(list(
     parser_rules = parser_rules,
@@ -309,11 +308,13 @@ rm(run_initial_setup, setup_paywall_domains, fetch_parser_rules, generate_paywal
 
 # 10: Apply parser rule
 .apply_parser_rule <- function(html, rule, json_df = NULL) {
-  if (is.na(rule$selector) || is.null(rule$selector)) {
+  # Check if rule or selector is invalid
+  if (is.null(rule) || is.na(rule$selector) || is.null(rule$selector)) {
     return(NA_character_)
   }
   
-  tryCatch({
+  # Try to evaluate the rule
+  result <- tryCatch({
     if (rule$type == "json" && !is.null(json_df)) {
       # Evaluate JSON-based rule
       eval(parse(text = rule$selector))
@@ -322,8 +323,211 @@ rm(run_initial_setup, setup_paywall_domains, fetch_parser_rules, generate_paywal
       eval(parse(text = rule$selector))
     }
   }, error = function(e) {
+    return(NA_character_)
+  }, warning = function(w) {
+    # Catch warnings and still try to return a result
+    suppressWarnings({
+      if (rule$type == "json" && !is.null(json_df)) {
+        eval(parse(text = rule$selector))
+      } else {
+        eval(parse(text = rule$selector))
+      }
+    })
+  })
+  
+  # Handle NULL results
+  if (is.null(result)) {
+    return(NA_character_)
+  }
+  
+  # Handle zero-length results
+  if (length(result) == 0) {
+    return(NA_character_)
+  }
+  
+  # Handle multiple results - take first one
+  if (length(result) > 1) {
+    result <- result[1]
+  }
+  
+  # Convert to character
+  result <- as.character(result)
+  
+  # Handle NA after conversion
+  if (is.na(result)) {
+    return(NA_character_)
+  }
+  
+  # Check for empty strings using is.na-safe method
+  if (!is.na(result) && nchar(result) == 0) {
+    return(NA_character_)
+  }
+  
+  return(result)
+}
+
+# Alternative simplified version that's even more robust
+.apply_parser_rule_safe <- function(html, rule, json_df = NULL) {
+  # Early return for invalid rules
+  if (is.null(rule) || is.null(rule$selector) || is.na(rule$selector)) {
+    return(NA_character_)
+  }
+  
+  # Wrap entire evaluation in tryCatch
+  result <- tryCatch({
+    # Suppress warnings during evaluation
+    suppressWarnings({
+      if (rule$type == "json" && !is.null(json_df)) {
+        eval(parse(text = rule$selector))
+      } else {
+        eval(parse(text = rule$selector))
+      }
+    })
+  }, error = function(e) {
     NA_character_
   })
+  
+  # Convert result to character vector, handling all edge cases
+  if (is.null(result) || length(result) == 0) {
+    return(NA_character_)
+  }
+  
+  # Take first element if multiple
+  if (length(result) > 1) {
+    result <- result[1]
+  }
+  
+  # Safe conversion to character
+  result <- tryCatch(
+    as.character(result),
+    error = function(e) NA_character_
+  )
+  
+  # Final check for empty or NA
+  if (is.na(result) || identical(result, "") || identical(result, character(0))) {
+    return(NA_character_)
+  }
+  
+  return(result)
+}
+
+# Use the safer version
+.apply_parser_rule <- .apply_parser_rule_safe
+
+# Also update the datetime parsing section to be more robust
+func_06_parse_html <- function(html_content, url, rules = NULL) {
+  # Load rules if not provided
+  if (is.null(rules)) {
+    rules <- .load_parser_rules()
+  }
+  
+  # Extract domain
+  domain <- .extract_domain(url)
+  
+  # Initialize output
+  output <- data.table(
+    domain = domain,
+    url = url,
+    timestamp_scraped = Sys.time(),
+    date_time = NA_character_,
+    author = NA_character_,
+    headline = NA_character_,
+    text = NA_character_,
+    paywall = NA
+  )
+  
+  # Parse HTML
+  html <- tryCatch({
+    read_html(html_content)
+  }, error = function(e) {
+    return(list(
+      success = FALSE,
+      data = output,
+      html = html_content,
+      error = paste("HTML parsing failed:", e$message)
+    ))
+  })
+  
+  # Check if html parsing returned an error
+  if (is.list(html) && "success" %in% names(html)) {
+    return(html)
+  }
+  
+  # Get domain-specific rules
+  parser_rules <- rules$parser[[domain]]
+  paywall_rules <- rules$paywall[[domain]]
+  
+  if (is.null(parser_rules)) {
+    return(list(
+      success = FALSE,
+      data = output,
+      html = html_content,
+      error = paste("No parser rules for domain:", domain)
+    ))
+  }
+  
+  # Handle JSON parsing if needed
+  json_df <- NULL
+  if (!is.null(parser_rules$uses_json) && parser_rules$uses_json) {
+    json_txt <- tryCatch({
+      html %>%
+        html_elements("script[type = \"application/ld+json\"]") %>%
+        html_text()
+    }, error = function(e) character(0))
+    
+    if (length(json_txt) > 0 && nchar(json_txt[1]) > 0) {
+      json_df <- tryCatch({
+        fromJSON(json_txt[1])
+      }, error = function(e) NULL)
+    }
+  }
+  
+  # Extract fields using the safe parser rule function
+  output$date_time <- .apply_parser_rule(html, parser_rules$datetime, json_df)
+  output$headline <- .apply_parser_rule(html, parser_rules$headline, json_df)
+  output$author <- .apply_parser_rule(html, parser_rules$author, json_df)
+  output$text <- .apply_parser_rule(html, parser_rules$text, json_df)
+  
+  # Safe datetime formatting
+  if (!is.na(output$date_time)) {
+    # Suppress timezone warnings
+    formatted_date <- suppressWarnings(tryCatch({
+      dt <- as_datetime(output$date_time)
+      if (!is.na(dt)) {
+        as.character(dt)
+      } else {
+        output$date_time
+      }
+    }, error = function(e) {
+      output$date_time
+    }))
+    output$date_time <- formatted_date
+  }
+  
+  # Check paywall
+  if (!is.null(paywall_rules)) {
+    if (isFALSE(paywall_rules$has_paywall)) {
+      output$paywall <- FALSE
+    } else {
+      output$paywall <- tryCatch(
+        .check_paywall(html, paywall_rules$paywall_markers),
+        error = function(e) NA
+      )
+    }
+  }
+  
+  # Validate output
+  is_valid <- !is.na(output$headline) && 
+    !is.na(output$text) && 
+    !is.na(nchar(output$text)) &&
+    nchar(output$text) > 50
+  
+  return(list(
+    success = is_valid,
+    data = output,
+    html = ifelse(is_valid, NA_character_, html_content),
+    error = ifelse(is_valid, NA_character_, "Validation failed - missing required fields")
+  ))
 }
 
 # 11: Check for paywall markers

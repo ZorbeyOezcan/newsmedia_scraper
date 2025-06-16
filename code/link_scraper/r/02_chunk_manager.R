@@ -35,12 +35,12 @@ get_module_paths <- function() {
 
 # 1: Defining the chunk builder function
 func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
-                        absolute_links      = NULL,
-                        exclude_domains     = NULL,
-                        exclude_retry_links = FALSE,
-                        seed                = NULL) {
+                                absolute_links      = NULL,
+                                exclude_domains     = NULL,
+                                exclude_retry_links = FALSE,
+                                seed                = NULL) {
   
-  if (!is.null(seed)) set.seed(seed)        # optional reproducibility
+  if (!is.null(seed)) set.seed(seed)  # for reproducibility if seed is provided
   
   paths      <- get_module_paths()
   input_file <- file.path(paths$input, "input.rds")
@@ -49,13 +49,13 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
   }
   dt <- as.data.table(readRDS(input_file))
   
-  # keep only links that are still unprocessed
+  # keep only unprocessed links
   dt <- dt[processed == FALSE]
   if (exclude_retry_links) dt <- dt[retry == FALSE]
   if (!is.null(exclude_domains)) dt <- dt[!domain %in% exclude_domains]
   if (nrow(dt) == 0) stop("No eligible links available for chunk creation.")
   
-  # decide chunk size
+  # determine chunk size
   if (!is.null(absolute_links)) {
     chunk_size <- min(absolute_links, nrow(dt))
   } else {
@@ -63,11 +63,11 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
   }
   if (chunk_size < 1) stop("Chunk size evaluates to < 1 link.")
   
-  # proportional sample counts per domain
+  # proportional sampling per domain
   dom_stats <- dt[, .N, by = domain]
   dom_stats[, n_sample := pmin(round(N / sum(N) * chunk_size), N)]
   
-  # top-up if rounding left a gap
+  # handle rounding gap
   remainder <- chunk_size - sum(dom_stats$n_sample)
   if (remainder > 0) {
     dom_stats[, gap := N - n_sample]
@@ -77,18 +77,18 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
     for (d in add_domains) dom_stats[domain == d, n_sample := n_sample + 1]
   }
   
-  # attach n_sample to every row and draw the samples
+  # merge sample sizes and draw samples
   dt <- merge(dt, dom_stats[, .(domain, n_sample)], by = "domain")
   sampled <- dt[, .SD[sample(.N, min(n_sample[1], .N))], by = domain]
   
-  # round-robin interleaving: assign per-domain order, shuffle once, then sort
+  # interleave domains with round-robin order
   sampled[, seq_id := seq_len(.N), by = domain]
   dom_order <- sample(unique(sampled$domain))
   sampled[, dom_ord := match(domain, dom_order)]
   setorder(sampled, seq_id, dom_ord)
   sampled[, c("seq_id", "dom_ord", "n_sample") := NULL]
   
-  # persist chunk with incrementing file name
+  # save the chunk to disk
   chunk_dir <- file.path(paths$input, "chunks")
   dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
   existing <- list.files(chunk_dir, pattern = "^chunk_(\\d+)\\.rds$")
@@ -96,18 +96,23 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
     max(as.integer(sub("^chunk_(\\d+)\\.rds$", "\\1", existing))) + 1
   } else 1
   chunk_name <- sprintf("chunk_%02d.rds", next_id)
-  saveRDS(sampled, file.path(chunk_dir, chunk_name))
+  chunk_path <- file.path(chunk_dir, chunk_name)
+  saveRDS(sampled, chunk_path)
   
-  # console summary
-  message("This chunk contains ", nrow(sampled), " links.")
-  message("chunk_proportion   : ", ifelse(is.null(absolute_links),
-                                          chunk_proportion, "—"))
-  message("absolute_links     : ", ifelse(is.null(absolute_links),
-                                          "—", absolute_links))
-  message("exclude_domains    : ",
+  # assign to global environment
+  assign(tools::file_path_sans_ext(chunk_name), sampled, envir = .GlobalEnv)
+  
+  # console summary with chunk name first
+  message("Chunk name           : ", chunk_name)
+  message("This chunk contains  : ", nrow(sampled), " links.")
+  message("chunk_proportion     : ", ifelse(is.null(absolute_links),
+                                            chunk_proportion, "—"))
+  message("absolute_links       : ", ifelse(is.null(absolute_links),
+                                            "—", absolute_links))
+  message("exclude_domains      : ",
           ifelse(is.null(exclude_domains), "FALSE",
                  paste(exclude_domains, collapse = ", ")))
-  message("exclude_retry_links: ", exclude_retry_links)
+  message("exclude_retry_links  : ", exclude_retry_links)
   
   invisible(sampled)
 }
