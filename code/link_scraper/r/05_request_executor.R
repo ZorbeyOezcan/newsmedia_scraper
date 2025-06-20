@@ -16,6 +16,7 @@
 # 
 # OUTPUTS TO:
 # - 07_response_analyzer: Complete response object with all metrics
+# - 10_log_manager: Request log entries
 #
 # ==============================================================================
 
@@ -28,16 +29,19 @@ library(lubridate)
 get_module_paths <- function() {
   base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
   list(
-    input = file.path(base_path, "data", "input"),
-    output = file.path(base_path, "data", "output"),
-    config = file.path(base_path, "data", "config"),
-    state = file.path(base_path, "data", "state"),
-    logs = file.path(base_path, "data", "logs")
+    input         = file.path(base_path, "data", "input"),
+    output        = file.path(base_path, "data", "output"),
+    config        = file.path(base_path, "data", "config"),
+    state         = file.path(base_path, "data", "state"),
+    logs          = file.path(base_path, "data", "logs"),
+    chunk_logs    = file.path(base_path, "data", "logs",  "chunk_logs"),
+    chunk_outputs = file.path(base_path, "data", "output", "chunk_outputs"),
+    chunk_inputs  = file.path(base_path, "data", "input",  "chunk_inputs")
   )
 }
 
 # 1: Main function to execute HTTP request from request package
-func_05_execute_request <- function(request_package) {
+func_05_execute_request <- function(request_package, chunk_name = "chunk_01", worker_id = 1) {
   # Validate input request package
   if (!is.list(request_package) || !request_package$success) {
     return(list(
@@ -136,6 +140,15 @@ func_05_execute_request <- function(request_package) {
     # We want to handle all responses manually in module 07
     req <- req_error(req, is_error = ~ FALSE)
     
+    # Log the request before execution
+    request_id <- func_10_log_request(
+      request_package = request_package,
+      session = session,
+      httr2_request = req,
+      chunk_name = chunk_name,
+      worker_id = worker_id
+    )
+    
     # Perform the actual HTTP request
     httr2_response <- req_perform(req)
     
@@ -149,6 +162,7 @@ func_05_execute_request <- function(request_package) {
       httr2_response = httr2_response,
       session_updated = session,
       request_info = list(
+        request_id = request_id,  # Include the logged request ID
         url = url,
         domain = domain,
         session_id = session$id,
@@ -162,12 +176,27 @@ func_05_execute_request <- function(request_package) {
     # Handle request errors (network failures, timeouts, etc.)
     message(sprintf("Request failed: %s (Error: %s)", url, e$message))
     
+    # Log the failed request attempt
+    request_id <- tryCatch({
+      func_10_log_request(
+        request_package = request_package,
+        session = session,
+        httr2_request = NULL,
+        chunk_name = chunk_name,
+        worker_id = worker_id
+      )
+    }, error = function(log_error) {
+      warning(sprintf("Failed to log request: %s", log_error$message))
+      NA_integer_
+    })
+    
     return(list(
       success = FALSE,
       error = as.character(e$message),
       httr2_response = NULL,
       session_updated = session,
       request_info = list(
+        request_id = request_id,  # Include request ID even for failed requests
         url = url,
         domain = domain,
         session_id = session$id,

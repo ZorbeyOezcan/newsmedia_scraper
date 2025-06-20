@@ -23,11 +23,14 @@ library(stringr)
 get_module_paths <- function() {
   base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
   list(
-    input = file.path(base_path, "data", "input"),
-    output = file.path(base_path, "data", "output"),
-    config = file.path(base_path, "data", "config"),
-    state = file.path(base_path, "data", "state"),
-    logs = file.path(base_path, "data", "logs")
+    input         = file.path(base_path, "data", "input"),
+    output        = file.path(base_path, "data", "output"),
+    config        = file.path(base_path, "data", "config"),
+    state         = file.path(base_path, "data", "state"),
+    logs          = file.path(base_path, "data", "logs"),
+    chunk_logs    = file.path(base_path, "data", "logs",  "chunk_logs"),
+    chunk_outputs = file.path(base_path, "data", "output", "chunk_outputs"),
+    chunk_inputs  = file.path(base_path, "data", "input",  "chunk_inputs")
   )
 }
 
@@ -930,17 +933,45 @@ init_request_log_dataset <- function(paths) {
     return(invisible(TRUE))
   }
   
+  # Create empty request log with all columns matching module 10 logging function
   request_log <- data.table(
-    id = integer(),                # integer (to match input id)
-    domain = character(),          # character (cleaned domain from input)
-    url = character(),             # character (URL from input)
-    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
-    from_chunk = integer(),        # integer (chunk number for batch tracking)
-    user_agent_id = integer(),     # integer (user agent used for request)
-    ip_address = character()       # character (IP/VPN address used)
+    # Core identification
+    request_id = integer(),                          # integer (unique incremental request ID)
+    id = integer(),                                  # integer (to match input id)
+    domain = character(),                            # character (cleaned domain from input)
+    url = character(),                               # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),     # POSIXct (date-time of scraping attempt)
+    from_chunk = integer(),                          # integer (chunk number for batch tracking)
+    
+    # Session and worker info
+    session_id = character(),                        # character (session identifier)
+    worker_id = integer(),                           # integer (worker process ID)
+    user_agent_id = integer(),                       # integer (user agent used for request)
+    ip_address = character(),                        # character (IP/VPN address used)
+    
+    # All header information as separate columns
+    user_agent = character(),                        # character (full user agent string)
+    accept = character(),                            # character (accept header value)
+    accept_language = character(),                   # character (accept-language header)
+    accept_encoding = character(),                   # character (accept-encoding header)
+    connection = character(),                        # character (connection header: keep-alive/close)
+    referer = character(),                           # character (referer URL)
+    host = character(),                              # character (host header)
+    upgrade_insecure_requests = character(),         # character (upgrade-insecure-requests value)
+    sec_fetch_dest = character(),                    # character (sec-fetch-dest header)
+    sec_fetch_mode = character(),                    # character (sec-fetch-mode header)
+    sec_fetch_site = character(),                    # character (sec-fetch-site: cross-site/same-site)
+    
+    # Additional request metadata
+    aggressiveness_level = integer(),                # integer (aggressiveness parameter 1-5)
+    browser_type = character(),                      # character (chrome/firefox/safari/edge)
+    is_mobile = logical(),                           # logical (TRUE if mobile user agent)
+    is_first_request = logical(),                    # logical (TRUE if first request in session)
+    session_request_count = integer(),               # integer (number of requests in this session)
+    cookie_jar_path = character()                    # character (path to cookie jar file)
   )
   
-  # Save the empty dataset as RDS file to the input path
+  # Save the empty dataset as RDS file to the logs path
   saveRDS(request_log, request_log_path)
   
   message("Request log dataset successfully created and saved to ", request_log_path)
@@ -977,34 +1008,50 @@ init_response_log_dataset <- function(paths) {
     return(invisible(TRUE))
   }
   
+  # Create empty response log with all columns matching module 10 logging function
   response_log <- data.table(
-    id = integer(),                # integer (to match input id)
-    domain = character(),          # character (cleaned domain from input)
-    url = character(),             # character (URL from input)
-    timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
-    from_chunk = integer(),        # integer (chunk number for batch tracking)
-    status_code = integer(),       # integer (HTTP status code)
-    response_headers = list(),     # list (all response headers for analysis)
-    response_body = character(),   # character (raw response body content)
-    response_time = numeric(),     # numeric (response time in seconds)
-    server_date = as.POSIXct(character()),  # POSIXct (server date from Date header)
-    content_type = character(),    # character (content type from headers)
-    content_length = integer(),    # integer (content length from headers or calculated)
-    server = character(),          # character (server information from headers)
-    user_agent_id = integer(),     # integer (user agent used for request)
-    ip_address = character(),      # character (IP/VPN address used)
-    dns_time = numeric(),          # numeric (DNS lookup time in seconds)
-    connect_time = numeric(),      # numeric (connection establishment time in seconds)
-    total_time = numeric(),        # numeric (total request time in seconds)
-    curl_error_code = integer(),   # integer (curl error code for low-level errors)
-    ssl_verify_result = integer(), # integer (SSL verification result code)
-    redirect_count = integer(),    # integer (number of redirects followed)
-    rate_limit_remaining = integer(),  # integer (remaining rate limit from headers)
-    rate_limit_reset = as.POSIXct(character()),  # POSIXct (rate limit reset time)
-    retry_after = integer()        # integer (retry after seconds from headers)
+    # IDs and core info
+    request_id = integer(),                          # integer (corresponding request ID)
+    response_id = integer(),                         # integer (unique incremental response ID)
+    id = integer(),                                  # integer (to match input id)
+    domain = character(),                            # character (cleaned domain from input)
+    url = character(),                               # character (URL from input)
+    timestamp_scraped = as.POSIXct(character()),     # POSIXct (date-time of scraping attempt)
+    from_chunk = integer(),                          # integer (chunk number for batch tracking)
+    
+    # Response details
+    status_code = integer(),                         # integer (HTTP status code)
+    response_headers = list(),                       # list (all response headers for analysis)
+    response_time = numeric(),                       # numeric (response time in seconds)
+    server_date = as.POSIXct(character()),          # POSIXct (server date from Date header)
+    content_type = character(),                      # character (content type from headers)
+    content_length = integer(),                      # integer (content length from headers or calculated)
+    server = character(),                            # character (server information from headers)
+    
+    # Request context
+    user_agent_id = integer(),                       # integer (user agent used for request)
+    ip_address = character(),                        # character (IP/VPN address used)
+    
+    # Timing details
+    dns_time = numeric(),                            # numeric (DNS lookup time in seconds)
+    connect_time = numeric(),                        # numeric (connection establishment time in seconds)
+    total_time = numeric(),                          # numeric (total request time in seconds)
+    
+    # Error and SSL info
+    curl_error_code = integer(),                     # integer (curl error code for low-level errors)
+    ssl_verify_result = integer(),                   # integer (SSL verification result code)
+    redirect_count = integer(),                      # integer (number of redirects followed)
+    
+    # Rate limiting
+    rate_limit_remaining = integer(),                # integer (remaining rate limit from headers)
+    rate_limit_reset = as.POSIXct(character()),      # POSIXct (rate limit reset time)
+    retry_after = integer(),                         # integer (retry after seconds from headers)
+    
+    # Response analysis result
+    response_analysis = character()                  # character (analysis result from module 07)
   )
   
-  # Save the empty dataset as RDS file to the input path
+  # Save the empty dataset as RDS file to the logs path
   saveRDS(response_log, response_log_path)
   
   message("Response log dataset successfully created and saved to ", response_log_path)

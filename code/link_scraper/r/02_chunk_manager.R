@@ -25,11 +25,14 @@ library(ggplot2)
 get_module_paths <- function() {
   base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
   list(
-    input = file.path(base_path, "data", "input"),
-    output = file.path(base_path, "data", "output"),
-    config = file.path(base_path, "data", "config"),
-    state = file.path(base_path, "data", "state"),
-    logs = file.path(base_path, "data", "logs")
+    input         = file.path(base_path, "data", "input"),
+    output        = file.path(base_path, "data", "output"),
+    config        = file.path(base_path, "data", "config"),
+    state         = file.path(base_path, "data", "state"),
+    logs          = file.path(base_path, "data", "logs"),
+    chunk_logs    = file.path(base_path, "data", "logs",  "chunk_logs"),
+    chunk_outputs = file.path(base_path, "data", "output", "chunk_outputs"),
+    chunk_inputs  = file.path(base_path, "data", "input",  "chunk_inputs")
   )
 }
 
@@ -39,70 +42,67 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
                                 exclude_domains     = NULL,
                                 exclude_retry_links = FALSE,
                                 seed                = NULL) {
-  
-  if (!is.null(seed)) set.seed(seed)  # for reproducibility if seed is provided
+  if (!is.null(seed)) set.seed(seed)             # reproducibility
   
   paths      <- get_module_paths()
   input_file <- file.path(paths$input, "input.rds")
-  if (!file.exists(input_file)) {
-    stop("Input file not found: ", input_file)
-  }
+  if (!file.exists(input_file)) stop("Input file not found: ", input_file)
   dt <- as.data.table(readRDS(input_file))
   
-  # keep only unprocessed links
+  # filter eligible links
   dt <- dt[processed == FALSE]
   if (exclude_retry_links) dt <- dt[retry == FALSE]
   if (!is.null(exclude_domains)) dt <- dt[!domain %in% exclude_domains]
   if (nrow(dt) == 0) stop("No eligible links available for chunk creation.")
   
   # determine chunk size
-  if (!is.null(absolute_links)) {
-    chunk_size <- min(absolute_links, nrow(dt))
+  chunk_size <- if (!is.null(absolute_links)) {
+    min(absolute_links, nrow(dt))
   } else {
-    chunk_size <- ceiling(nrow(dt) * chunk_proportion)
+    ceiling(nrow(dt) * chunk_proportion)
   }
   if (chunk_size < 1) stop("Chunk size evaluates to < 1 link.")
   
-  # proportional sampling per domain
+  # proportional domain sampling
   dom_stats <- dt[, .N, by = domain]
   dom_stats[, n_sample := pmin(round(N / sum(N) * chunk_size), N)]
   
-  # handle rounding gap
+  # close rounding gaps
   remainder <- chunk_size - sum(dom_stats$n_sample)
   if (remainder > 0) {
     dom_stats[, gap := N - n_sample]
-    add_pool <- dom_stats[gap > 0]
+    add_pool    <- dom_stats[gap > 0]
     add_domains <- sample(add_pool$domain, remainder,
                           prob = add_pool$gap, replace = TRUE)
     for (d in add_domains) dom_stats[domain == d, n_sample := n_sample + 1]
   }
   
-  # merge sample sizes and draw samples
-  dt <- merge(dt, dom_stats[, .(domain, n_sample)], by = "domain")
+  # draw samples
+  dt      <- merge(dt, dom_stats[, .(domain, n_sample)], by = "domain")
   sampled <- dt[, .SD[sample(.N, min(n_sample[1], .N))], by = domain]
   
-  # interleave domains with round-robin order
-  sampled[, seq_id := seq_len(.N), by = domain]
+  # round-robin interleaving
+  sampled[, seq_id  := seq_len(.N), by = domain]
   dom_order <- sample(unique(sampled$domain))
   sampled[, dom_ord := match(domain, dom_order)]
   setorder(sampled, seq_id, dom_ord)
   sampled[, c("seq_id", "dom_ord", "n_sample") := NULL]
   
-  # save the chunk to disk
-  chunk_dir <- file.path(paths$input, "chunks")
+  # file & object names
+  chunk_dir  <- file.path(paths$input, "chunks")
   dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
-  existing <- list.files(chunk_dir, pattern = "^chunk_(\\d+)\\.rds$")
-  next_id  <- if (length(existing)) {
+  existing   <- list.files(chunk_dir, pattern = "^chunk_(\\d+)\\.rds$")
+  next_id    <- if (length(existing)) {
     max(as.integer(sub("^chunk_(\\d+)\\.rds$", "\\1", existing))) + 1
   } else 1
-  chunk_name <- sprintf("chunk_%02d.rds", next_id)
-  chunk_path <- file.path(chunk_dir, chunk_name)
+  chunk_name <- sprintf("chunk_%03d", next_id)
+  chunk_path <- file.path(chunk_dir, paste0(chunk_name, ".rds"))
+  
+  # persist & assign
   saveRDS(sampled, chunk_path)
+  assign(chunk_name, sampled, envir = .GlobalEnv)
   
-  # assign to global environment
-  assign(tools::file_path_sans_ext(chunk_name), sampled, envir = .GlobalEnv)
-  
-  # console summary with chunk name first
+  # console summary
   message("Chunk name           : ", chunk_name)
   message("This chunk contains  : ", nrow(sampled), " links.")
   message("chunk_proportion     : ", ifelse(is.null(absolute_links),
@@ -114,8 +114,10 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
                  paste(exclude_domains, collapse = ", ")))
   message("exclude_retry_links  : ", exclude_retry_links)
   
-  invisible(sampled)
+  
+  invisible(chunk_name)
 }
+
 
 # Calling the function: 
 # func_02_build_chunk()
