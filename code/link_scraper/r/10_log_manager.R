@@ -34,195 +34,124 @@ get_module_paths <- function() {
   )
 }
 
-
-# 1. Function to log HTTP request parameters: 
-func_10_log_request <- function(request_package, session, httr2_request = NULL, chunk_name = "chunk_01", worker_id = 1) {
-  
-  # Validate inputs
+# 1. Function to log requests 
+func_10_log_request <- function(request_package,
+                                session,
+                                httr2_request = NULL,
+                                chunk_name    = current_chunk,
+                                worker_id     = 1) {
+  # verify  
   if (!is.list(request_package) || !request_package$success) {
     warning("Invalid request package provided to logger")
     return(invisible(FALSE))
   }
-  
-  # Define directories
-  master_log_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs"
-  chunk_logs_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/chunk_logs"
-  
-  # Create chunk logs directory if it doesn't exist
-  if (!dir.exists(chunk_logs_dir)) {
-    dir.create(chunk_logs_dir, recursive = TRUE)
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001' etc.")
   }
   
-  # Define file paths
-  master_request_log_path <- file.path(master_log_dir, "request_log.rds")
-  chunk_request_log_path <- file.path(chunk_logs_dir, paste0(chunk_name, "_request_log.rds"))
-  
-  # Get current VPN IP address
-  vpn_log_path <- file.path(master_log_dir, "vpn_log.rds")
-  current_ip <- if (file.exists(vpn_log_path)) {
-    vpn_log <- readRDS(vpn_log_path)
-    # Get the most recently used VPN IP
-    vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
+  # locate / create the chunk-specific data.table 
+  dt_name <- paste0(chunk_name, "_request_log")
+  if (exists(dt_name, envir = .GlobalEnv)) {
+    chunk_log <- get(dt_name, envir = .GlobalEnv)
   } else {
-    NA_character_
+    chunk_log <- data.table()  # empty → columns will be created on first bind
   }
   
-  # Generate unique request_id based on master log
-  request_id <- 1L  # Default for first request ever
+  # derive new request_id 
+  request_id <- if (nrow(chunk_log)) max(chunk_log$request_id, na.rm = TRUE) + 1L else 1L
   
-  if (file.exists(master_request_log_path)) {
-    master_log <- readRDS(master_request_log_path)
-    if (nrow(master_log) > 0) {
-      # Get the highest request_id and increment
-      request_id <- max(master_log$request_id, na.rm = TRUE) + 1L
-    }
-  }
+  # obtain IP from VPN log (optional) 
+  vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
+  current_ip   <- if (file.exists(vpn_log_path)) {
+    vpn_log <- readRDS(vpn_log_path)
+    vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
+  } else NA_character_
   
-  # If chunk log exists, check its highest ID too
-  if (file.exists(chunk_request_log_path)) {
-    chunk_log <- readRDS(chunk_request_log_path)
-    if (nrow(chunk_log) > 0) {
-      chunk_max_id <- max(chunk_log$request_id, na.rm = TRUE)
-      # Use the higher of the two
-      request_id <- max(request_id, chunk_max_id + 1L)
-    }
-  }
-  
-  # Extract chunk number from chunk name
+  # convenience  
+  headers      <- if (is.null(session) || is.null(session$headers)) list() else session$headers
   chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
   
-  # Extract all header information from session
-  headers <- session$headers
-  
-  # Create the log entry with all request parameters
+  # create new log entry  
   log_entry <- data.table(
-    # Core identification
-    request_id = request_id,
-    id = request_package$request_params$id,
-    domain = request_package$request_params$domain,
-    url = request_package$request_params$url,
-    timestamp_scraped = Sys.time(),
-    from_chunk = chunk_number,
-    
-    # Session and worker info
-    session_id = session$id,
-    worker_id = worker_id,
-    user_agent_id = session$user_agent_id,
-    ip_address = current_ip,
-    
-    # All header information as separate columns
-    user_agent = headers$user_agent,
-    accept = headers$accept,
-    accept_language = headers$accept_language,
-    accept_encoding = headers$accept_encoding,
-    connection = headers$connection,
-    referer = headers$referer,
-    host = headers$host,
-    upgrade_insecure_requests = ifelse(is.null(headers$upgrade_insecure_requests), 
-                                       NA_character_, 
-                                       headers$upgrade_insecure_requests),
-    sec_fetch_dest = headers$sec_fetch_dest,
-    sec_fetch_mode = headers$sec_fetch_mode,
-    sec_fetch_site = headers$sec_fetch_site,
-    
-    # Additional request metadata
-    aggressiveness_level = request_package$request_params$aggressiveness,
-    browser_type = session$browser_type,
-    is_mobile = session$is_mobile,
-    is_first_request = ifelse(is.null(session$first_request), 
-                              FALSE, 
-                              session$first_request),
-    session_request_count = ifelse(is.null(session$request_count), 
-                                   0L, 
-                                   session$request_count),
-    cookie_jar_path = session$cookie_jar
+    request_id              = as.integer(request_id),
+    id                      = ifelse(is.null(request_package$request_params$id),
+                                     NA_character_, as.character(request_package$request_params$id)),
+    domain                  = ifelse(is.null(request_package$request_params$domain),
+                                     NA_character_, as.character(request_package$request_params$domain)),
+    url                     = ifelse(is.null(request_package$request_params$url),
+                                     NA_character_, as.character(request_package$request_params$url)),
+    timestamp_scraped       = Sys.time(),
+    from_chunk              = as.integer(chunk_number),
+    session_id              = ifelse(is.null(session$id),
+                                     NA_character_, as.character(session$id)),
+    worker_id               = as.integer(worker_id),
+    user_agent_id           = ifelse(is.null(session$user_agent_id),
+                                     NA_integer_, as.integer(session$user_agent_id)),
+    ip_address              = ifelse(is.null(current_ip),
+                                     NA_character_, as.character(current_ip)),
+    user_agent              = ifelse(is.null(headers$user_agent),
+                                     NA_character_, as.character(headers$user_agent)),
+    accept                  = ifelse(is.null(headers$accept),
+                                     NA_character_, as.character(headers$accept)),
+    accept_language         = ifelse(is.null(headers$accept_language),
+                                     NA_character_, as.character(headers$accept_language)),
+    accept_encoding         = ifelse(is.null(headers$accept_encoding),
+                                     NA_character_, as.character(headers$accept_encoding)),
+    connection              = ifelse(is.null(headers$connection),
+                                     NA_character_, as.character(headers$connection)),
+    referer                 = ifelse(is.null(headers$referer),
+                                     NA_character_, as.character(headers$referer)),
+    host                    = ifelse(is.null(headers$host),
+                                     NA_character_, as.character(headers$host)),
+    upgrade_insecure_requests =
+      ifelse(is.null(headers$upgrade_insecure_requests),
+             NA_character_, as.character(headers$upgrade_insecure_requests)),
+    sec_fetch_dest          = ifelse(is.null(headers$sec_fetch_dest),
+                                     NA_character_, as.character(headers$sec_fetch_dest)),
+    sec_fetch_mode          = ifelse(is.null(headers$sec_fetch_mode),
+                                     NA_character_, as.character(headers$sec_fetch_mode)),
+    sec_fetch_site          = ifelse(is.null(headers$sec_fetch_site),
+                                     NA_character_, as.character(headers$sec_fetch_site)),
+    aggressiveness_level    = ifelse(is.null(request_package$request_params$aggressiveness),
+                                     NA_integer_, as.integer(request_package$request_params$aggressiveness)),
+    browser_type            = ifelse(is.null(session$browser_type),
+                                     NA_character_, as.character(session$browser_type)),
+    is_mobile               = ifelse(is.null(session$is_mobile),
+                                     NA, as.logical(session$is_mobile)),
+    is_first_request        = ifelse(is.null(session$first_request),
+                                     FALSE, as.logical(session$first_request)),
+    session_request_count   = ifelse(is.null(session$request_count),
+                                     0L, as.integer(session$request_count)),
+    cookie_jar_path         = ifelse(is.null(session$cookie_jar),
+                                     NA_character_, as.character(session$cookie_jar))
   )
   
-  # Load existing chunk log or create new
-  if (file.exists(chunk_request_log_path)) {
-    chunk_log <- readRDS(chunk_request_log_path)
-    # Append new entry
-    chunk_log <- rbind(chunk_log, log_entry, fill = TRUE)
-  } else {
-    # Create new chunk log
-    chunk_log <- log_entry
-  }
+  ## harmonise column structure & classes 
+  all_cols <- union(names(chunk_log), names(log_entry))
   
-  # Save updated chunk log
-  saveRDS(chunk_log, chunk_request_log_path)
+  # add missing columns to each data.table
+  for (col in setdiff(all_cols, names(chunk_log)))  chunk_log[,  (col) := NA_character_]
+  for (col in setdiff(all_cols, names(log_entry)))  log_entry[, (col) := NA_character_]
   
-  # Log to console for monitoring
-  message(sprintf("[REQUEST LOG] ID: %d | Domain: %s | Session: %s | UA: %d", 
-                  request_id, 
-                  request_package$request_params$domain,
-                  session$id,
-                  session$user_agent_id))
+  # bring both tables to identical column order
+  data.table::setcolorder(chunk_log, all_cols)
+  data.table::setcolorder(log_entry, all_cols)
   
-  # Return the request_id for reference
-  return(invisible(request_id))
-}
-
-# Function to merge chunk request log into master log
-func_10_merge_request_logs <- function(chunk_name) {
-  
-  # Define directories
-  master_log_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs"
-  chunk_logs_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/chunk_logs"
-  
-  # Define file paths
-  master_request_log_path <- file.path(master_log_dir, "request_log.rds")
-  chunk_request_log_path <- file.path(chunk_logs_dir, paste0(chunk_name, "_request_log.rds"))
-  
-  # Check if chunk log exists
-  if (!file.exists(chunk_request_log_path)) {
-    warning(sprintf("Chunk request log not found: %s", chunk_request_log_path))
-    return(invisible(FALSE))
-  }
-  
-  # Read chunk log
-  chunk_log <- readRDS(chunk_request_log_path)
-  
-  if (nrow(chunk_log) == 0) {
-    message("Chunk request log is empty, nothing to merge")
-    return(invisible(TRUE))
-  }
-  
-  # Load existing master log
-  if (file.exists(master_request_log_path)) {
-    master_log <- readRDS(master_request_log_path)
-    
-    # Check for duplicate request_ids before merging
-    duplicate_ids <- intersect(master_log$request_id, chunk_log$request_id)
-    if (length(duplicate_ids) > 0) {
-      warning(sprintf("Found %d duplicate request_ids, removing from chunk log", 
-                      length(duplicate_ids)))
-      chunk_log <- chunk_log[!request_id %in% duplicate_ids]
+  # unify classes (fallback: character)  
+  for (col in all_cols) {
+    if (!identical(class(chunk_log[[col]]), class(log_entry[[col]]))) {
+      chunk_log[, (col) := as.character(get(col))]
+      log_entry[, (col) := as.character(get(col))]
     }
-    
-    # Merge logs
-    master_log <- rbind(master_log, chunk_log, fill = TRUE)
-  } else {
-    # This should not happen as master log is created in module 01
-    warning("Master request log not found, creating new one")
-    master_log <- chunk_log
   }
+
   
-  # Sort by request_id for consistency
-  setorder(master_log, request_id)
+  # append and re-assign  
+  chunk_log <- data.table::rbindlist(list(chunk_log, log_entry),
+                                     use.names = TRUE, fill = TRUE)
+  assign(dt_name, chunk_log, envir = .GlobalEnv)
   
-  # Save updated master log
-  saveRDS(master_log, master_request_log_path)
-  
-  # Print summary
-  message(sprintf("Merged %d requests from %s into master log", 
-                  nrow(chunk_log), 
-                  chunk_name))
-  message(sprintf("Master log now contains %d total requests", 
-                  nrow(master_log)))
-  
-  # Keep chunk log in place for analysis
-  
-  return(invisible(TRUE))
+  invisible(request_id)
 }
 
 
@@ -232,226 +161,137 @@ func_10_merge_request_logs <- function(chunk_name) {
 
 
 # 2. Function to log HTTP response parameters
-func_10_log_response <- function(response_result, chunk_name = "chunk_01", response_analysis = NA_character_) {
-  
-  # Validate inputs
+func_10_log_response <- function(response_result,
+                                 chunk_name       = current_chunk,
+                                 response_analysis = NA_character_) {
+  # validation 
   if (!is.list(response_result)) {
     warning("Invalid response result provided to logger")
     return(invisible(FALSE))
   }
-  
-  # Define directories
-  master_log_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs"
-  chunk_logs_dir <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/chunk_logs"
-  
-  # Create chunk logs directory if it doesn't exist
-  if (!dir.exists(chunk_logs_dir)) {
-    dir.create(chunk_logs_dir, recursive = TRUE)
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001', 'chunk_123', …")
   }
   
-  # Define file paths
-  master_response_log_path <- file.path(master_log_dir, "response_log.rds")
-  chunk_response_log_path <- file.path(chunk_logs_dir, paste0(chunk_name, "_response_log.rds"))
+  # locate current log table 
+  dt_name   <- paste0(chunk_name, "_response_log")
+  chunk_log <- if (exists(dt_name, envir = .GlobalEnv))
+    get(dt_name, envir = .GlobalEnv) else data.table()
   
-  # Extract request info
+  # next response_id
+  response_id <- if (nrow(chunk_log)) max(chunk_log$response_id, na.rm = TRUE) + 1L else 1L
+  
+  # request context 
   request_info <- response_result$request_info
-  
-  # Get request_id from request_info
-  request_id <- ifelse(is.null(request_info$request_id), 
-                       NA_integer_, 
-                       request_info$request_id)
-  
-  # Generate unique response_id based on master log
-  response_id <- 1L  # Default for first response ever
-  
-  if (file.exists(master_response_log_path)) {
-    master_log <- readRDS(master_response_log_path)
-    if (nrow(master_log) > 0) {
-      # Get the highest response_id and increment
-      response_id <- max(master_log$response_id, na.rm = TRUE) + 1L
-    }
-  }
-  
-  # If chunk log exists, check its highest ID too
-  if (file.exists(chunk_response_log_path)) {
-    chunk_log <- readRDS(chunk_response_log_path)
-    if (nrow(chunk_log) > 0) {
-      chunk_max_id <- max(chunk_log$response_id, na.rm = TRUE)
-      # Use the higher of the two
-      response_id <- max(response_id, chunk_max_id + 1L)
-    }
-  }
-  
-  # Extract chunk number from chunk name
+  request_id   <- ifelse(is.null(request_info$request_id), NA_integer_, request_info$request_id)
   chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
   
-  # Initialize variables with default values
-  status_code <- NA_integer_
-  response_headers <- list()
-  response_time <- NA_real_
-  server_date <- as.POSIXct(NA)
-  content_type <- NA_character_
-  content_length <- NA_integer_
-  server <- NA_character_
-  rate_limit_remaining <- NA_integer_
-  rate_limit_reset <- as.POSIXct(NA)
-  retry_after <- NA_integer_
+  # defaults 
+  status_code           <- NA_integer_
+  response_headers      <- list()
+  response_time         <- NA_real_
+  server_date           <- as.POSIXct(NA)
+  content_type          <- NA_character_
+  content_length        <- NA_integer_
+  server                <- NA_character_
+  rate_limit_remaining  <- NA_integer_
+  rate_limit_reset      <- as.POSIXct(NA)
+  retry_after           <- NA_integer_
   
-  # Extract response data if request was successful
+  # extract data when successful 
   if (response_result$success && !is.null(response_result$httr2_response)) {
     resp <- response_result$httr2_response
     
-    # Get status code
-    status_code <- tryCatch(resp_status(resp), error = function(e) NA_integer_)
-    
-    # Get all response headers
-    response_headers <- tryCatch(resp_headers(resp), error = function(e) list())
-    
-    # Extract specific headers
-    content_type <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
-    
-    # Get content length from headers or calculate
-    content_length <- tryCatch({
-      cl <- resp_header(resp, "content-length")
-      if (!is.null(cl)) as.integer(cl) else NA_integer_
-    }, error = function(e) NA_integer_)
-    
-    # Get server header
-    server <- tryCatch({
-      srv <- resp_header(resp, "server")
-      if (!is.null(srv)) srv else NA_character_
-    }, error = function(e) NA_character_)
-    
-    # Get server date
-    server_date <- tryCatch({
-      date_str <- resp_header(resp, "date")
-      if (!is.null(date_str)) {
-        parse_http_date(date_str)
-      } else {
-        as.POSIXct(NA)
-      }
-    }, error = function(e) as.POSIXct(NA))
-    
-    # Get rate limit headers if present
-    rate_limit_remaining <- tryCatch({
-      rl <- resp_header(resp, "x-ratelimit-remaining")
-      if (!is.null(rl)) as.integer(rl) else NA_integer_
-    }, error = function(e) NA_integer_)
-    
-    rate_limit_reset <- tryCatch({
-      reset <- resp_header(resp, "x-ratelimit-reset")
-      if (!is.null(reset)) {
-        as.POSIXct(as.integer(reset), origin = "1970-01-01")
-      } else {
-        as.POSIXct(NA)
-      }
-    }, error = function(e) as.POSIXct(NA))
-    
-    # Get retry-after header if present
-    retry_after <- tryCatch({
-      ra <- resp_header(resp, "retry-after")
-      if (!is.null(ra)) as.integer(ra) else NA_integer_
-    }, error = function(e) NA_integer_)
-    
-    # Extract timing information from httr2 response
-    # Note: httr2 doesn't provide detailed timing like curl, so we estimate
-    response_time <- tryCatch({
-      # If response has timing info, use it
-      if (!is.null(resp$times)) {
-        as.numeric(resp$times$total)
-      } else {
-        NA_real_
-      }
-    }, error = function(e) NA_real_)
+    status_code      <- tryCatch(resp_status(resp),       error = function(e) NA_integer_)
+    response_headers <- tryCatch(resp_headers(resp),      error = function(e) list())
+    content_type     <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
+    content_length   <- tryCatch({ cl <- resp_header(resp, "content-length");
+    if (!is.null(cl)) as.integer(cl) else NA_integer_ },
+    error = function(e) NA_integer_)
+    server           <- tryCatch({ srv <- resp_header(resp, "server");
+    if (!is.null(srv)) srv else NA_character_ },
+    error = function(e) NA_character_)
+    server_date      <- tryCatch({ date_str <- resp_header(resp, "date");
+    if (!is.null(date_str)) parse_http_date(date_str) else as.POSIXct(NA) },
+    error = function(e) as.POSIXct(NA))
+    rate_limit_remaining <- tryCatch({ rl <- resp_header(resp, "x-ratelimit-remaining");
+    if (!is.null(rl)) as.integer(rl) else NA_integer_ },
+    error = function(e) NA_integer_)
+    rate_limit_reset     <- tryCatch({ rst <- resp_header(resp, "x-ratelimit-reset");
+    if (!is.null(rst)) as.POSIXct(as.integer(rst), origin="1970-01-01") else as.POSIXct(NA) },
+    error = function(e) as.POSIXct(NA))
+    retry_after          <- tryCatch({ ra <- resp_header(resp, "retry-after");
+    if (!is.null(ra)) as.integer(ra) else NA_integer_ },
+    error = function(e) NA_integer_)
+    response_time        <- tryCatch(if (!is.null(resp$times)) as.numeric(resp$times$total) else NA_real_,
+                                     error = function(e) NA_real_)
   }
   
-  # Get current VPN IP address
-  vpn_log_path <- file.path(master_log_dir, "vpn_log.rds")
-  current_ip <- if (file.exists(vpn_log_path)) {
+  # VPN IP lookup 
+  vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
+  current_ip   <- if (file.exists(vpn_log_path)) {
     vpn_log <- readRDS(vpn_log_path)
-    # Get the most recently used VPN IP
     vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
-  } else {
-    NA_character_
-  }
+  } else NA_character_
   
-  # Create the log entry with all response parameters
+  # assemble entry 
   log_entry <- data.table(
-    # IDs and core info
-    request_id = request_id,
-    response_id = response_id,
-    id = ifelse(is.null(request_info$id), NA_integer_, request_info$id),
-    domain = ifelse(is.null(request_info$domain), NA_character_, request_info$domain),
-    url = ifelse(is.null(request_info$url), NA_character_, request_info$url),
-    timestamp_scraped = Sys.time(),
-    from_chunk = chunk_number,
-    
-    # Response details
-    status_code = status_code,
-    response_headers = list(response_headers),  # Store as list column
-    response_time = response_time,
-    server_date = server_date,
-    content_type = content_type,
-    content_length = content_length,
-    server = server,
-    
-    # Request context
-    user_agent_id = ifelse(is.null(request_info$user_agent_id), 
-                           NA_integer_, 
-                           request_info$user_agent_id),
-    ip_address = current_ip,
-    
-    # Timing details (simplified for httr2)
-    dns_time = NA_real_,        # httr2 doesn't provide this level of detail
-    connect_time = NA_real_,    # httr2 doesn't provide this level of detail
-    total_time = response_time, # Use response_time as total_time
-    
-    # Error and SSL info
-    curl_error_code = ifelse(!response_result$success, 1L, 0L),
-    ssl_verify_result = NA_integer_,  # httr2 handles SSL automatically
-    redirect_count = NA_integer_,     # Could be extracted from response history
-    
-    # Rate limiting
+    request_id           = request_id,
+    response_id          = response_id,
+    id                   = ifelse(is.null(request_info$id), NA_integer_, request_info$id),
+    domain               = ifelse(is.null(request_info$domain), NA_character_, request_info$domain),
+    url                  = ifelse(is.null(request_info$url), NA_character_, request_info$url),
+    timestamp_scraped    = Sys.time(),
+    from_chunk           = chunk_number,
+    status_code          = status_code,
+    response_headers     = list(response_headers),
+    response_time        = response_time,
+    server_date          = server_date,
+    content_type         = content_type,
+    content_length       = content_length,
+    server               = server,
+    user_agent_id        = ifelse(is.null(request_info$user_agent_id), NA_integer_, request_info$user_agent_id),
+    ip_address           = current_ip,
+    dns_time             = NA_real_,
+    connect_time         = NA_real_,
+    total_time           = response_time,
+    curl_error_code      = ifelse(!response_result$success, 1L, 0L),
+    ssl_verify_result    = NA_integer_,
+    redirect_count       = NA_integer_,
     rate_limit_remaining = rate_limit_remaining,
-    rate_limit_reset = rate_limit_reset,
-    retry_after = retry_after,
-    
-    # Response analysis result from module 07
-    response_analysis = response_analysis
+    rate_limit_reset     = rate_limit_reset,
+    retry_after          = retry_after,
+    response_analysis    = response_analysis
   )
   
-  # Load existing chunk log or create new
-  if (file.exists(chunk_response_log_path)) {
-    chunk_log <- readRDS(chunk_response_log_path)
-    # Append new entry
-    chunk_log <- rbind(chunk_log, log_entry, fill = TRUE)
-  } else {
-    # Create new chunk log
-    chunk_log <- log_entry
+  # harmonise
+  all_cols <- union(names(chunk_log), names(log_entry))
+  
+  # add missing
+  for (col in setdiff(all_cols, names(chunk_log)))  chunk_log[,  (col) := NA_character_]
+  for (col in setdiff(all_cols, names(log_entry)))  log_entry[, (col) := NA_character_]
+  
+  # same order 
+  data.table::setcolorder(chunk_log, all_cols)
+  data.table::setcolorder(log_entry, all_cols)
+  
+  # use same var type 
+  for (col in all_cols) {
+    if (!identical(class(chunk_log[[col]]), class(log_entry[[col]]))) {
+      chunk_log[,  (col) := as.character(get(col))]
+      log_entry[, (col) := as.character(get(col))]
+    }
   }
   
-  # Save updated chunk log
-  saveRDS(chunk_log, chunk_response_log_path)
+  # rbind 
+  chunk_log <- data.table::rbindlist(
+    list(chunk_log, log_entry),
+    use.names = TRUE, fill = TRUE
+  )
   
-  # Log to console for monitoring
-  message(sprintf("[RESPONSE LOG] Req: %d | Resp: %d | Status: %s | Domain: %s", 
-                  request_id,
-                  response_id,
-                  ifelse(is.na(status_code), "ERROR", as.character(status_code)),
-                  request_info$domain))
+  assign(dt_name, chunk_log, envir = .GlobalEnv)
   
-  # Return the response_id for reference
-  return(invisible(response_id))
-}
-
-# Helper function to parse HTTP date headers
-parse_http_date <- function(date_string) {
-  # HTTP date format: "Wed, 21 Oct 2015 07:28:00 GMT"
-  tryCatch({
-    as.POSIXct(date_string, format = "%a, %d %b %Y %H:%M:%S", tz = "GMT")
-  }, error = function(e) {
-    as.POSIXct(NA)
-  })
+  invisible(response_id)
 }
 
 
@@ -460,4 +300,290 @@ parse_http_date <- function(date_string) {
 
 
 
-# 3. 
+# 3. Function to append successfully parsed articles to chunk output
+func_10_append_output <- function(parse_result,
+                                  input_info,
+                                  response_info,
+                                  chunk_name = current_chunk) {
+  # Validate inputs
+  if (!is.list(parse_result)) {
+    warning("Invalid parse result provided to output logger")
+    return(invisible(FALSE))
+  }
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001', 'chunk_002', etc.")
+  }
+  
+  # Locate chunk-specific output data.table
+  dt_name <- paste0(chunk_name, "_output")
+  if (exists(dt_name, envir = .GlobalEnv)) {
+    chunk_output <- get(dt_name, envir = .GlobalEnv)
+  } else {
+    chunk_output <- data.table()  # Empty table, columns will be created on first bind
+  }
+  
+  # Extract timestamp from response info or use current time
+  timestamp_scraped <- if (!is.null(response_info$server_date) && !is.na(response_info$server_date)) {
+    response_info$server_date
+  } else {
+    Sys.time()
+  }
+  
+  # Create new output entry
+  output_entry <- data.table(
+    id                = input_info$id,
+    domain            = input_info$domain,
+    url               = input_info$url,
+    timestamp_scraped = timestamp_scraped,
+    date_time         = parse_result$date_time,
+    author            = parse_result$author,
+    headline          = parse_result$headline,
+    text              = parse_result$text,
+    paywall           = parse_result$paywall
+  )
+  
+  # Append and reassign to global environment
+  chunk_output <- rbind(chunk_output, output_entry, fill = TRUE)
+  assign(dt_name, chunk_output, envir = .GlobalEnv)
+  
+  invisible(TRUE)
+}
+
+
+
+##### 
+
+
+
+# 4. Function to append retry entry 
+func_10_append_retry <- function(retry_reason,
+                                 url,
+                                 chunk_name = current_chunk) {
+  # Validate inputs
+  if (is.null(retry_reason) || is.null(url)) {
+    warning("Invalid retry reason or URL provided to retry logger")
+    return(invisible(FALSE))
+  }
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001', 'chunk_002', etc.")
+  }
+  
+  # Locate chunk-specific retry data.table
+  dt_name <- paste0(chunk_name, "_retry")
+  if (exists(dt_name, envir = .GlobalEnv)) {
+    chunk_retry <- get(dt_name, envir = .GlobalEnv)
+  } else {
+    chunk_retry <- data.table()  # Empty table, columns will be created on first bind
+  }
+  
+  # Extract chunk number from chunk name
+  chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
+  
+  # Get request log and response log data.tables
+  request_log_name <- paste0(chunk_name, "_request_log")
+  response_log_name <- paste0(chunk_name, "_response_log")
+  
+  # Find matching entries in logs by URL
+  request_entry <- if (exists(request_log_name, envir = .GlobalEnv)) {
+    request_log <- get(request_log_name, envir = .GlobalEnv)
+    request_log[url == url][.N]  # Get last matching entry
+  } else {
+    NULL
+  }
+  
+  response_entry <- if (exists(response_log_name, envir = .GlobalEnv)) {
+    response_log <- get(response_log_name, envir = .GlobalEnv)
+    response_log[url == url][.N]  # Get last matching entry
+  } else {
+    NULL
+  }
+  
+  # Extract values with safe defaults
+  request_id <- ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 
+                       request_entry$request_id, NA_integer_)
+  response_id <- ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                        response_entry$response_id, NA_integer_)
+  
+  # Create new retry entry
+  retry_entry <- data.table(
+    id                   = ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 
+                                  request_entry$id, NA_integer_),
+    domain               = ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 
+                                  request_entry$domain, NA_character_),
+    url                  = url,
+    timestamp_scraped    = ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 
+                                  request_entry$timestamp_scraped, Sys.time()),
+    from_chunk           = chunk_number,
+    status_code          = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$status_code, NA_integer_),
+    response_headers     = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$response_headers, list()),
+    response_body        = NA_character_,  # Not stored in response log
+    response_time        = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$response_time, NA_real_),
+    retry_reason         = retry_reason,
+    server_date          = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$server_date, as.POSIXct(NA)),
+    content_type         = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$content_type, NA_character_),
+    content_length       = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$content_length, NA_integer_),
+    server               = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$server, NA_character_),
+    user_agent_id        = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$user_agent_id, NA_integer_),
+    ip_address           = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$ip_address, NA_character_),
+    dns_time             = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$dns_time, NA_real_),
+    connect_time         = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$connect_time, NA_real_),
+    total_time           = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$total_time, NA_real_),
+    curl_error_code      = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$curl_error_code, NA_integer_),
+    ssl_verify_result    = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$ssl_verify_result, NA_integer_),
+    redirect_count       = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$redirect_count, NA_integer_),
+    rate_limit_remaining = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$rate_limit_remaining, NA_integer_),
+    rate_limit_reset     = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$rate_limit_reset, as.POSIXct(NA)),
+    retry_after          = ifelse(!is.null(response_entry) && nrow(response_entry) > 0, 
+                                  response_entry$retry_after, NA_integer_)
+  )
+  
+  # harmonize 
+  all_cols <- union(names(chunk_retry), names(retry_entry))
+  
+  for (col in setdiff(all_cols, names(chunk_retry)))  chunk_retry[,  (col) := NA_character_]
+  for (col in setdiff(all_cols, names(retry_entry)))  retry_entry[, (col) := NA_character_]
+  
+  data.table::setcolorder(chunk_retry,  all_cols)
+  data.table::setcolorder(retry_entry, all_cols)
+  
+  for (col in all_cols) {
+    if (!identical(class(chunk_retry[[col]]), class(retry_entry[[col]]))) {
+      chunk_retry[,  (col) := as.character(get(col))]
+      retry_entry[, (col) := as.character(get(col))]
+    }
+  }
+  
+  # bind 
+  chunk_retry <- data.table::rbindlist(
+    list(chunk_retry, retry_entry),
+    use.names = TRUE, fill = TRUE
+  )
+  
+  # assign to global
+  assign(dt_name, chunk_retry, envir = .GlobalEnv)
+  
+  invisible(TRUE)
+}
+
+
+
+#####
+
+
+
+# 5. Function to append non-article links to error dataset
+func_10_append_error <- function(error_reason,
+                                 input_info,
+                                 chunk_name = current_chunk) {
+  # Validate inputs
+  if (is.null(error_reason) || !is.list(input_info)) {
+    warning("Invalid error reason or input info provided to error logger")
+    return(invisible(FALSE))
+  }
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001', 'chunk_002', etc.")
+  }
+  
+  # Locate chunk-specific error data.table
+  dt_name <- paste0(chunk_name, "_error")
+  if (exists(dt_name, envir = .GlobalEnv)) {
+    chunk_error <- get(dt_name, envir = .GlobalEnv)
+  } else {
+    chunk_error <- data.table()  # Empty table, columns will be created on first bind
+  }
+  
+  # Create new error entry
+  error_entry <- data.table(
+    id           = input_info$id,
+    domain       = input_info$domain,
+    url          = input_info$url,
+    error_reason = error_reason
+  )
+  
+  # Append and reassign to global environment
+  chunk_error <- rbind(chunk_error, error_entry, fill = TRUE)
+  assign(dt_name, chunk_error, envir = .GlobalEnv)
+  
+
+  invisible(TRUE)
+}
+
+
+
+##### 
+
+
+
+# 6. Function to append articles with parsing errors to parse_error dataset
+func_10_append_parse_error <- function(parse_result,
+                                       input_info,
+                                       html_content,
+                                       chunk_name = current_chunk) {
+  # Validate inputs
+  if (!is.list(parse_result) || !is.list(input_info) || is.null(html_content)) {
+    warning("Invalid parse result, input info, or HTML content provided to parse error logger")
+    return(invisible(FALSE))
+  }
+  if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
+    stop("chunk_name must look like 'chunk_001', 'chunk_002', etc.")
+  }
+  
+  # Locate chunk-specific parse_error data.table
+  dt_name <- paste0(chunk_name, "_parse_error")
+  if (exists(dt_name, envir = .GlobalEnv)) {
+    chunk_parse_error <- get(dt_name, envir = .GlobalEnv)
+  } else {
+    chunk_parse_error <- data.table()  # Empty table, columns will be created on first bind
+  }
+  
+  # Create new parse error entry
+  parse_error_entry <- data.table(
+    id                = input_info$id,
+    domain            = input_info$domain,
+    url               = input_info$url,
+    timestamp_scraped = Sys.time(),
+    date_time         = ifelse(is.null(parse_result$date_time), NA_character_, parse_result$date_time),
+    author            = ifelse(is.null(parse_result$author), NA_character_, parse_result$author),
+    headline          = ifelse(is.null(parse_result$headline), NA_character_, parse_result$headline),
+    text              = ifelse(is.null(parse_result$text), NA_character_, parse_result$text),
+    paywall           = ifelse(is.null(parse_result$paywall), NA, parse_result$paywall),
+    html_content      = as.character(html_content)  # Store complete HTML for later reprocessing
+  )
+  
+  # Append and reassign to global environment
+  chunk_parse_error <- rbind(chunk_parse_error, parse_error_entry, fill = TRUE)
+  assign(dt_name, chunk_parse_error, envir = .GlobalEnv)
+  
+  # Determine which fields are missing for console feedback
+  missing_fields <- c()
+  if (is.na(parse_error_entry$date_time)) missing_fields <- c(missing_fields, "date_time")
+  if (is.na(parse_error_entry$author)) missing_fields <- c(missing_fields, "author")
+  if (is.na(parse_error_entry$headline)) missing_fields <- c(missing_fields, "headline")
+  if (is.na(parse_error_entry$text)) missing_fields <- c(missing_fields, "text")
+  
+  invisible(TRUE)
+}
+
+
+
+##### 
+
+
+

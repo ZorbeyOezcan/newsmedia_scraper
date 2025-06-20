@@ -241,6 +241,9 @@ init_input_dataset <- function(paths) {
   # Ensure data.table format
   setDT(input_dt)
   
+  # remove possible duplicates
+  input_dt <- unique(input_dt, by = "result_link")
+  
   # Helper function to clean domains from URLs, remove 'www.' and TLDs (.de, .com, etc.)
   .extract_domain <- function(url) {
     url
@@ -869,6 +872,8 @@ init_retry_dataset <- function(paths) {
   }
   
   retry <- data.table(
+    request_id = integer(),        # integer (ID from request log)
+    response_id = integer(),       # integer (ID from response log)
     id = integer(),                # integer (to match input id)
     domain = character(),          # character (cleaned domain from input)
     url = character(),             # character (URL from input)

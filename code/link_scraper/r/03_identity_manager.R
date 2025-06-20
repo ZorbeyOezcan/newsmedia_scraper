@@ -222,7 +222,6 @@ func_03_initialzie_vpn_connnection <- function() {
 
 
 # 4: Function to create a new session for a domain
-# 4: Function to create a new session for a domain
 func_03_create_session <- function(domain, user_agent_id) {
   
   # Load required data

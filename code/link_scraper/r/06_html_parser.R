@@ -549,38 +549,47 @@ func_06_parse_html <- function(html_content, url, rules = NULL) {
   return(FALSE)
 }
 
-# 12: Single HTML parsing function
-func_06_parse_html <- function(html_content, url, rules = NULL) {
-  # Load rules if not provided
-  if (is.null(rules)) {
-    rules <- .load_parser_rules()
+# 12: Main HTML parsing function for pipeline integration
+func_06_parse_html <- function(response_result, chunk_name = current_chunk) {
+  # Validate input
+  if (!is.list(response_result) || !response_result$success) {
+    warning("Invalid response result provided to parser")
+    return(invisible(FALSE))
   }
   
-  # Extract domain
-  domain <- .extract_domain(url)
+  # Extract HTML content and URL from response
+  html_content <- tryCatch({
+    httr2::resp_body_string(response_result$httr2_response)
+  }, error = function(e) {
+    warning("Failed to extract HTML content from response")
+    return(invisible(FALSE))
+  })
   
-  # Initialize output
-  output <- data.table(
-    domain = domain,
-    url = url,
-    timestamp_scraped = Sys.time(),
-    date_time = NA_character_,
-    author = NA_character_,
-    headline = NA_character_,
-    text = NA_character_,
-    paywall = NA
+  # Get URL and other info from response
+  url <- response_result$request_info$url
+  input_info <- list(
+    id = response_result$request_info$id,
+    domain = response_result$request_info$domain,
+    url = url
   )
+  
+  # Load parsing rules
+  rules <- .load_parser_rules()
+  
+  # Extract domain from URL
+  domain <- .extract_domain(url)
   
   # Parse HTML
   html <- tryCatch({
     read_html(html_content)
   }, error = function(e) {
-    return(list(
-      success = FALSE,
-      data = output,
-      html = html_content,
-      error = paste("HTML parsing failed:", e$message)
-    ))
+    # If HTML parsing fails completely, log as error
+    func_10_append_error(
+      error_reason = paste("HTML parsing failed:", e$message),
+      input_info = input_info,
+      chunk_name = chunk_name
+    )
+    return(invisible(FALSE))
   })
   
   # Get domain-specific rules
@@ -588,62 +597,124 @@ func_06_parse_html <- function(html_content, url, rules = NULL) {
   paywall_rules <- rules$paywall[[domain]]
   
   if (is.null(parser_rules)) {
-    return(list(
-      success = FALSE,
-      data = output,
-      html = html_content,
-      error = paste("No parser rules for domain:", domain)
-    ))
+    # No parser rules for this domain - log as error
+    func_10_append_error(
+      error_reason = paste("No parser rules for domain:", domain),
+      input_info = input_info,
+      chunk_name = chunk_name
+    )
+    return(invisible(FALSE))
   }
   
   # Handle JSON parsing if needed
   json_df <- NULL
   if (!is.null(parser_rules$uses_json) && parser_rules$uses_json) {
-    json_txt <- html %>%
-      html_elements("script[type = \"application/ld+json\"]") %>%
-      html_text()
+    json_txt <- tryCatch({
+      html %>%
+        html_elements("script[type = \"application/ld+json\"]") %>%
+        html_text()
+    }, error = function(e) character(0))
     
-    if (length(json_txt) > 0) {
+    if (length(json_txt) > 0 && nchar(json_txt[1]) > 0) {
       json_df <- tryCatch({
         fromJSON(json_txt[1])
       }, error = function(e) NULL)
     }
   }
   
-  # Extract fields
-  output$date_time <- .apply_parser_rule(html, parser_rules$datetime, json_df)
-  output$headline <- .apply_parser_rule(html, parser_rules$headline, json_df)
-  output$author <- .apply_parser_rule(html, parser_rules$author, json_df)
-  output$text <- .apply_parser_rule(html, parser_rules$text, json_df)
+  # Extract fields using parser rules
+  date_time <- .apply_parser_rule(html, parser_rules$datetime, json_df)
+  headline <- .apply_parser_rule(html, parser_rules$headline, json_df)
+  author <- .apply_parser_rule(html, parser_rules$author, json_df)
+  text <- .apply_parser_rule(html, parser_rules$text, json_df)
   
-  # Format datetime if extracted
-  if (!is.na(output$date_time) && is.character(output$date_time)) {
-    output$date_time <- tryCatch({
-      as.character(as_datetime(output$date_time))
-    }, error = function(e) output$date_time)
+  # Format datetime if successfully extracted
+  if (!is.na(date_time)) {
+    formatted_date <- suppressWarnings(tryCatch({
+      dt <- as_datetime(date_time)
+      if (!is.na(dt)) {
+        as.character(dt)
+      } else {
+        date_time
+      }
+    }, error = function(e) {
+      date_time
+    }))
+    date_time <- formatted_date
   }
   
-  # Check paywall
+  # Check paywall status
+  paywall <- NA
   if (!is.null(paywall_rules)) {
-    if (!paywall_rules$has_paywall) {
-      output$paywall <- FALSE
+    if (isFALSE(paywall_rules$has_paywall)) {
+      paywall <- FALSE
     } else {
-      output$paywall <- .check_paywall(html, paywall_rules$paywall_markers)
+      paywall <- tryCatch(
+        .check_paywall(html, paywall_rules$paywall_markers),
+        error = function(e) NA
+      )
     }
   }
   
-  # Validate output
-  is_valid <- !is.na(output$headline) && 
-    !is.na(output$text) && 
-    nchar(output$text) > 50
+  # Create parse result object
+  parse_result <- list(
+    date_time = date_time,
+    author = author,
+    headline = headline,
+    text = text,
+    paywall = paywall
+  )
   
-  return(list(
-    success = is_valid,
-    data = output,
-    html = ifelse(is_valid, NA_character_, html_content),
-    error = ifelse(is_valid, NA_character_, "Validation failed - missing required fields")
-  ))
+  # Count how many fields are NA
+  na_count <- sum(is.na(c(date_time, author, headline, text, paywall)))
+  
+  # Get response info for logging
+  response_info <- list(
+    server_date = tryCatch({
+      date_header <- httr2::resp_header(response_result$httr2_response, "date")
+      if (!is.null(date_header)) {
+        httr2::parse_http_date(date_header)
+      } else {
+        Sys.time()
+      }
+    }, error = function(e) Sys.time())
+  )
+  
+  # Decision logic based on NA values
+  if (na_count == 5) {
+    # All fields are NA - log as error
+    func_10_append_error(
+      error_reason = "All parsing fields returned NA",
+      input_info = input_info,
+      chunk_name = chunk_name
+    )
+  } else if (na_count == 0) {
+    # No fields are NA - successful parse, append to output
+    func_10_append_output(
+      parse_result = parse_result,
+      input_info = input_info,
+      response_info = response_info,
+      chunk_name = chunk_name
+    )
+  } else {
+    # Some fields are NA, some are not - parse error
+    func_10_append_parse_error(
+      parse_result = parse_result,
+      input_info = input_info,
+      html_content = html_content,
+      chunk_name = chunk_name
+    )
+  }
+  
+  # Function completed, ready for next response
+  success_flag <- (na_count == 0)         
+  list(
+    success = success_flag,                
+    data    = parse_result,                
+    error   = if (!success_flag) "missing_fields" else NULL
+  )
 }
+
 
 # 13: Batch processing function
 func_06_parse_html_batch <- function(html_list, url_list, rules = NULL) {
@@ -721,3 +792,6 @@ initialize_html_parser <- function() {
 # Execute initialization 
 initialize_html_parser()
 rm(initialize_html_parser)
+
+# Check Parsing Rules: 
+# parser_rules <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parser_rules_fetched.rds") 
