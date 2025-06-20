@@ -167,12 +167,18 @@ func_04_update_session_headers <- function(session, is_first_request = TRUE, chu
   updated_headers$connection <- ifelse(connection_random < 0.05, "close", "keep-alive")
   
   # Handle first request of a session
-  if (is_first_request) {
+  #if (is_first_request) {
     # First request uses cross-site referer (already set in session creation)
     # Ensure Sec-Fetch-Site is set to cross-site
-    updated_headers$sec_fetch_site <- "cross-site"
+    #updated_headers$sec_fetch_site <- "cross-site"
     
     # Mark session as no longer on first request
+    #session$first_request <- FALSE
+    
+  # test 2 - same site referrer 
+  if (is_first_request) {
+    updated_headers$sec_fetch_site <- "same-site"
+    updated_headers$referer        <- session$same_site_referer
     session$first_request <- FALSE
     
   } else {
@@ -403,6 +409,7 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
   
   # Determine if this is the first request for this session
   is_first_request <- ifelse(is.null(active_session$first_request), TRUE, active_session$first_request)
+  
   
   # Update session headers based on context
   active_session <- func_04_update_session_headers(

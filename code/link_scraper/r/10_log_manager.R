@@ -406,6 +406,8 @@ func_10_append_retry <- function(retry_reason,
   
   # Create new retry entry
   retry_entry <- data.table(
+    request_id           = request_id,       
+    response_id          = response_id,      
     id                   = ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 
                                   request_entry$id, NA_integer_),
     domain               = ifelse(!is.null(request_entry) && nrow(request_entry) > 0, 

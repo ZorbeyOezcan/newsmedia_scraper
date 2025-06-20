@@ -328,8 +328,9 @@ func_03_create_session <- function(domain, user_agent_id) {
     accept_language = accept_language,
     accept_encoding = accept_encoding,
     connection = "keep-alive",
-    referer = selected_referer,
-    host = host_header
+    referer    = same_site_referer # test 2 using same site referrer
+    # referer = selected_referer 
+    # test 1 host = host_header  deleting host header - way better results 
   )
   
   # Add Upgrade-Insecure-Requests conditionally
@@ -341,7 +342,8 @@ func_03_create_session <- function(domain, user_agent_id) {
   # Add Sec-Fetch headers
   headers$sec_fetch_dest <- header_params$sec_fetch_dest$default
   headers$sec_fetch_mode <- header_params$sec_fetch_mode$default
-  headers$sec_fetch_site <- "cross-site"  # Initial request is cross-site
+  headers$sec_fetch_site <- "same-site" # test 2  using same site referrer
+  # headers$sec_fetch_site <- "cross-site"  # Initial request is cross-site
   
   # Create session ID
   session_id <- paste0("session_", domain, "_", user_agent_id, "_", format(Sys.time(), "%Y%m%d%H%M%S"))

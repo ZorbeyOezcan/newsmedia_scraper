@@ -707,12 +707,11 @@ func_06_parse_html <- function(response_result, chunk_name = current_chunk) {
   }
   
   # Function completed, ready for next response
-  success_flag <- (na_count == 0)         
-  list(
-    success = success_flag,                
-    data    = parse_result,                
-    error   = if (!success_flag) "missing_fields" else NULL
-  )
+  return(list(
+    success = (na_count == 0),
+    data    = parse_result,
+    error   = if (na_count == 0) NULL else "missing_fields"
+  ))
 }
 
 

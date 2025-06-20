@@ -1,11 +1,7 @@
 # ==============================================================================
-# PRELIMINARY WEB SCRAPER RUN SCRIPT
-# ==============================================================================
-# This script executes a test run of the modular web scraping system
-# Processing links sequentially through the complete pipeline
+# PRELIMINARY WEB SCRAPER RUN SCRIPT – FIXED CHUNK, RESETTABLE TESTING
 # ==============================================================================
 
-# Ensure correct working directory
 setwd("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/r")
 
 # Load all required modules
@@ -20,36 +16,35 @@ source("07_response_analyzer.R")
 source("09_storage_manager.R")
 source("10_log_manager.R")
 
+paths <- get_module_paths()
+chunk_dir <- file.path(paths$input, "chunks")
+chunk_path <- file.path(chunk_dir, "chunk_999.rds")  # fixed chunk name 
+chunk_obj_name <- "chunk_999"
+
+# init chunk once 
+if (!file.exists(chunk_path)) {
+  message("Creating fixed chunk (chunk_999)...")
+  func_02_build_chunk(absolute_links = 50)  
+  # Rename and move to fixed path
+  last_chunk <- ls(pattern = "^chunk_\\d{3}$", envir = .GlobalEnv)
+  last_created <- last_chunk[which.max(as.integer(sub("chunk_", "", last_chunk)))]
+  chunk_dt <- get(last_created, envir = .GlobalEnv)
+  saveRDS(chunk_dt, chunk_path)
+  rm(list = last_created, envir = .GlobalEnv)
+}
+# relaod chunk 
+chunk_dt <- readRDS(chunk_path)
+assign(chunk_obj_name, chunk_dt, envir = .GlobalEnv)
+current_chunk <- chunk_obj_name
+message(sprintf("Using fixed chunk: %s", current_chunk))
+
+
 # ==============================================================================
-# INITIALIZATION PHASE
+# RESET CONTROL STRUCTURES
 # ==============================================================================
 
-# Establish VPN connection and log entry
-message("\nEstablishing VPN connection...")
-func_03_initialzie_vpn_connnection()
-
-# Build a new chunk with 50 links for testing
-message("\nBuilding chunk...")
-func_02_build_chunk(absolute_links = 50)
-
-# Detect the newest chunk object
-chunk_objs <- ls(pattern = "^chunk_\\d{3}$", envir = .GlobalEnv)
-if (length(chunk_objs) == 0) stop("No chunk object loaded.")
-
-current_chunk <- chunk_objs[
-  which.max(as.integer(sub("^chunk_(\\d{3})$", "\\1", chunk_objs)))
-]
-message(sprintf("Working with chunk: %s", current_chunk))
-
-# Display chunk overview
-func_02_plot_chunk_overview(current_chunk)
-
-# Initialize chunk-specific data structures
-message("\nInitializing chunk data structures...")
+message("Resetting chunk-related data structures...")
 func_09_init_data_structures(current_chunk)
-
-# Initialize session pool for all domains
-message("\nInitializing session pool...")
 func_04_initialize_session_pool()
 
 # ==============================================================================
@@ -118,45 +113,22 @@ for (i in 1:nrow(chunk_dt)) {
   )
   
   # Handle response based on analysis
-  if (analysis_result$success && analysis_result$action == "parse") {
-    # Response was analyzed and parsed successfully
-    if (analysis_result$parse_result$success) {
-      # Successful parse - append to output
-      message("Successfully parsed article!")
-      func_10_append_output(
-        parse_result = analysis_result$parse_result$data,
-        input_info = link_info,
-        response_info = list(server_date = Sys.time()),  # Simple response info
-        chunk_name = current_chunk
-      )
-      successful_count <- successful_count + 1
+  if (analysis_result$action == "parse") {
+    
+    if (isTRUE(analysis_result$parse_result$success)) {
+      successful_count  <- successful_count + 1
     } else {
-      # Parse error - save with HTML for later reprocessing
-      message(sprintf("Parse error: %s", analysis_result$parse_result$error))
-      func_10_append_parse_error(
-        parse_result = analysis_result$parse_result$data,
-        input_info = link_info,
-        html_content = analysis_result$parse_result$html,
-        chunk_name = current_chunk
-      )
       parse_error_count <- parse_error_count + 1
     }
     
   } else if (analysis_result$action == "retry") {
-    # Response needs retry (non-200 status, network error, etc.)
-    message(sprintf("Adding to retry: %s", analysis_result$message))
-    retry_count <- retry_count + 1
-    # Retry already logged by module 07
     
-  } else {
-    # Other errors
-    message(sprintf("Error: %s", analysis_result$message))
-    func_10_append_error(
-      error_reason = analysis_result$message,
-      input_info = link_info,
-      chunk_name = current_chunk
-    )
+    retry_count <- retry_count + 1
+    
+  } else {  # "error"
+    
     error_count <- error_count + 1
+
   }
   
   # Add small delay between requests
@@ -195,6 +167,18 @@ message(sprintf("Output entries: %d", nrow(output_dt)))
 message(sprintf("Retry entries: %d", nrow(retry_dt)))
 message(sprintf("Error entries: %d", nrow(error_dt)))
 message(sprintf("Parse error entries: %d", nrow(parse_error_dt)))
+
+# Status code distribution: 
+message("\nHTTP status code distribution:")
+status_vector <- get(paste0(current_chunk, "_response_log"), envir = .GlobalEnv)$status_code
+status_table <- sort(table(status_vector, useNA = "ifany"), decreasing = TRUE)
+
+for (i in seq_along(status_table)) {
+  code <- names(status_table)[i]
+  code_label <- ifelse(code == "NA", "NA (no response)", code)
+  count <- as.integer(status_table[i])
+  message(sprintf("Status %s: %d", code_label, count))
+}
 
 # Helper operator for string concatenation
 `%+%` <- function(a, b) paste0(a, b)
