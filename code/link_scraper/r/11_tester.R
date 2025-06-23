@@ -25,18 +25,6 @@ library(stringr)
 library(httr2)
 
 
-# Configuration Function
-get_module_paths <- function() {
-  base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
-  list(
-    input = file.path(base_path, "data", "input"),
-    output = file.path(base_path, "data", "output"),
-    config = file.path(base_path, "data", "config"),
-    state = file.path(base_path, "data", "state"),
-    logs = file.path(base_path, "data", "logs")
-  )
-}
-
 #######
 
 
@@ -320,4 +308,16 @@ test_result_06_outputformat <- test_06_parser_output_format()
 
 # All 06 tests
 test_result_06_all_tests <- run_module_tests("06_html_parser")
+
+
+
+
+
+
+
+
+
+
+
+
 

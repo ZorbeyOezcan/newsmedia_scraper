@@ -27,23 +27,6 @@ library(data.table)
 # Source Functions 
 source("03_identity_manager.R")
 
-# Configuration Function
-get_module_paths <- function() {
-  base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
-  list(
-    input         = file.path(base_path, "data", "input"),
-    output        = file.path(base_path, "data", "output"),
-    config        = file.path(base_path, "data", "config"),
-    state         = file.path(base_path, "data", "state"),
-    logs          = file.path(base_path, "data", "logs"),
-    chunk_logs    = file.path(base_path, "data", "logs",  "chunk_logs"),
-    chunk_outputs = file.path(base_path, "data", "output", "chunk_outputs"),
-    chunk_inputs  = file.path(base_path, "data", "input",  "chunk_inputs")
-  )
-}
-
-
-
 # Helper function to clean domain names
 .extract_clean_domain <- function(domain) {
   # Remove protocol and www.
