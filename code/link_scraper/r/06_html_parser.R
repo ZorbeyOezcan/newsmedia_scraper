@@ -1,10 +1,20 @@
 # ==============================================================================
-# MODULE 06: HTML PARSER - ENHANCED PAYWALL RULES SETUP
+# MODULE: 06 - HTML PARSER & RULE MANAGEMENT
 # ==============================================================================
-# 
-# This function fetches HTML content from paywall and free URLs for each domain,
-# analyzes the HTML structure including script blocks and meta tags to identify
-# paywall-specific markers, and saves the results as RDS files for later use.
+#
+# This module is responsible for setting up all parsing and paywall detection
+# rules, and for applying these rules to raw HTML content.
+#
+# Rule Setup (run once):
+# - setup_paywall_rules: Fetches sample pages and analyzes HTML/CSS/Script
+#   differences to generate paywall markers.
+# - setup_parser_rules: Clones the 'paperboy' repository and extracts
+#   domain-specific parsing logic into executable R functions.
+#
+# Main Function (run per request):
+# - func_06_parse_html: Receives a response object, applies the correct
+#   paywall and parsing rules based on the domain, and routes the
+#   structured result to the appropriate output (final_data, parse_error, error).
 #
 # ==============================================================================
 
@@ -15,9 +25,10 @@ library(httr2)
 library(rvest)
 library(stringr)
 library(jsonlite)
+library(lubridate)
 
 
-# 1. Main function to setup paywall rules 
+# 1. Main function to setup paywall rules
 setup_paywall_rules <- function() {
   paths <- get_module_paths()
   
@@ -34,15 +45,15 @@ setup_paywall_rules <- function() {
   message("Loading paywall domains CSV...")
   
   # Read CSV with proper handling
-  paywall_data <- fread(paywall_csv_path, 
-                        sep = ";", 
+  paywall_data <- fread(paywall_csv_path,
+                        sep = ";",
                         encoding = "UTF-8",
                         header = TRUE,
                         blank.lines.skip = TRUE)
   
   # Clean column names
-  setnames(paywall_data, 
-           old = names(paywall_data), 
+  setnames(paywall_data,
+           old = names(paywall_data),
            new = c("domain", "paywall_url", "free_url"))
   
   paywall_data[, domain := sub("\\..*$", "", domain)]
@@ -74,7 +85,7 @@ setup_paywall_rules <- function() {
     html_storage <- data.table(
       domain = character(),
       url = character(),
-      url_type = character(),  # "paywall" or "free"
+      url_type = character(), # "paywall" or "free"
       raw_html = character(),
       status_code = integer(),
       fetch_success = logical(),
@@ -85,7 +96,7 @@ setup_paywall_rules <- function() {
     fetch_url_with_retry <- function(url, url_type, domain_name, user_agents) {
       # First attempt with primary user agent
       response <- tryCatch({
-        GET(url, 
+        GET(url,
             timeout(30),
             user_agent(user_agents[1]))
       }, error = function(e) {
@@ -121,10 +132,10 @@ setup_paywall_rules <- function() {
       
       # If first attempt failed, try with alternative user agent
       message("First attempt failed, trying with alternative user agent...")
-      Sys.sleep(2)  # Longer delay before retry
+      Sys.sleep(2) # Longer delay before retry
       
       response <- tryCatch({
-        GET(url, 
+        GET(url,
             timeout(30),
             user_agent(user_agents[2]))
       }, error = function(e) {
@@ -195,7 +206,7 @@ setup_paywall_rules <- function() {
         result <- fetch_url_with_retry(url, "paywall", domain_name, user_agents)
         html_storage <- rbind(html_storage, result)
         
-        Sys.sleep(1)  # Delay between requests
+        Sys.sleep(1) # Delay between requests
       }
       
       # Fetch free URLs
@@ -206,7 +217,7 @@ setup_paywall_rules <- function() {
         result <- fetch_url_with_retry(url, "free", domain_name, user_agents)
         html_storage <- rbind(html_storage, result)
         
-        Sys.sleep(1)  # Delay between requests
+        Sys.sleep(1) # Delay between requests
       }
     }
     
@@ -216,12 +227,11 @@ setup_paywall_rules <- function() {
   }
   
   # STEP 2: ENHANCED HTML ANALYSIS INCLUDING SCRIPTS AND META TAGS
-  
   message("\n HTML analysis for paywall markers")
   
   # Define comprehensive paywall keywords
   paywall_keywords <- c(
-    # add to: 
+    # add to:
     "paywall", "bezahlschranke", "bezahlartikel", "premium", "plus",
     "abo", "abonnement", "abonnent", "bezahlinhalt", "kostenpflichtig",
     "registrierung", "anmeldung", "zugang", "vollzugang", "bezahlpflicht",
@@ -238,11 +248,11 @@ setup_paywall_rules <- function() {
     "meinaz", "mein az", "azplus", "badge-meine_azplus",
     "artdetail_paywall", "funnelentry", "abo-start", "mein abo",
     "freischalten", "weiterlesen", "abo-wall", "angebot", "paywall-layer",
-    "offerlink", "fp-paywall", "aboWall", "Beliebtestes Angebot", "6 Wochen kostenlos testen", 
-    "Inklusive Zugriff auf die digitale Zeitung", 
+    "offerlink", "fp-paywall", "aboWall", "Beliebtestes Angebot", "6 Wochen kostenlos testen",
+    "Inklusive Zugriff auf die digitale Zeitung",
     
-    # Pricing 
-    "\\\\d+[,.]\\\\d+\\s*€.*(/\\s*(Monat|Woche))"
+    # Pricing
+    "\\d+[,.]\\d+\\s*€.*(/\\s*(Monat|Woche))"
   )
   
   # Initialize paywall rules storage
@@ -439,7 +449,7 @@ setup_paywall_rules <- function() {
             start <- max(1, match_pos - 20)
             end <- min(nchar(script_content), match_pos + attr(match_pos, "match.length") + 50)
             snippet <- substr(script_content, start, end)
-            snippet <- gsub("\\s+", " ", snippet)  # Normalize whitespace
+            snippet <- gsub("\\s+", " ", snippet) # Normalize whitespace
             script_markers <- c(script_markers, snippet)
           }
         }
@@ -597,7 +607,7 @@ setup_paywall_rules <- function() {
     }
     
     # Determine if domain has paywall (based on no_paywall flag, not markers)
-    has_paywall <- !is_no_paywall_domain  # TRUE unless explicitly marked as no_paywall
+    has_paywall <- !is_no_paywall_domain # TRUE unless explicitly marked as no_paywall
     
     # Store rules
     paywall_rules[[domain_name]] <- list(
@@ -677,195 +687,345 @@ rm(setup_paywall_rules)
 
 
 
-# 2. Main function to setup parser rules with enhanced tracking
+# 2. Main function to setup parser rules with complete code extraction
 setup_parser_rules <- function() {
   paths <- get_module_paths()
   dir.create(paths$parsing_config, showWarnings = FALSE, recursive = TRUE)
   
-  csv_path     <- file.path(paths$input, "paywall_domains.csv")
-  output_rds   <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
+  # Define paths
+  paperboy_git_path <- file.path(paths$parsing_config, "paperboy_git")
+  output_rds <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
   overview_rds <- file.path(paths$parsing_config, "06_parser_overview.rds")
   
+  # Load domain list from CSV
+  csv_path <- file.path(paths$input, "paywall_domains.csv")
   if (!file.exists(csv_path)) {
     stop("paywall_domains.csv not found at: ", csv_path)
   }
   
-  # Load CSV 
   message("Loading paywall domains CSV...")
   pw <- data.table::fread(csv_path, sep = ";", encoding = "UTF-8",
                           header = TRUE, blank.lines.skip = TRUE)
   data.table::setnames(pw, old = names(pw),
                        new = c("domain", "paywall_url", "free_url"))
   
-  # Ensure every domain ends with ".de" for fetching 
+  # Ensure every domain ends with ".de" for fetching
   pw[, domain_full := ifelse(grepl("\\.de$", domain, ignore.case = TRUE),
                              domain,
                              paste0(domain, ".de"))]
   
-  # create cleaned name (without TLD) for storage
+  # Create cleaned name (without TLD) for storage
   pw[, domain := sub("\\..*$", "", domain_full)]
   
   domains_full <- unique(pw$domain_full)
   domains_full <- domains_full[!is.na(domains_full) & nzchar(domains_full)]
   message(sprintf("Found %d unique domains to process", length(domains_full)))
   
-  # Helpers 
+  # Helper function to map domain to filename
   domain_to_file <- function(d) {
     switch(d,
            "augsburger-allgemeine.de" = "deliver_augsburger_allgemeine.R",
-           "n-tv.de"                  = "deliver_n-tv_de.R",
-           "faz.de"                   = "deliver_faz_net.R", 
+           "n-tv.de" = "deliver_n-tv_de.R",
+           "faz.de" = "deliver_faz_net.R",
            sprintf("deliver_%s.R", gsub("[-\\.]", "_", d)))
   }
   
-  pull <- function(txt, pat) {
-    m <- regmatches(txt, regexec(pat, txt, perl = TRUE))
-    if (length(m[[1]]) > 1) trimws(m[[1]][2]) else NA_character_
+  # Step 1: Confirm Paperboy repository already exists
+  message("\n=== Step 1: Using manually cloned Paperboy repository ===")
+  if (!dir.exists(paperboy_git_path)) {
+    stop("Expected paperboy_git directory does not exist: ", paperboy_git_path)
   }
   
-  
-  extract_assignment <- function(txt, var) {
-    # Look for '<-' that starts the assignment to the requested `var`
-    # and capture everything until the next recognised assignment
-    rx <- sprintf(
-      "(?s)\\b%s\\s*<-\\s*(.*?)\\n\\s*(?:(?:datetime|headline|author|text)\\s*<-|s_n_list\\s*\\()",
-      var
-    )
-    m <- regmatches(txt, regexec(rx, txt, perl = TRUE))
-    if (length(m[[1]]) > 1) trimws(m[[1]][2]) else NA_character_
+  # Verify R directory exists
+  r_dir <- file.path(paperboy_git_path, "R")
+  if (!dir.exists(r_dir)) {
+    stop("R directory not found in cloned repository. Please check the repository structure.")
   }
   
-  extract_rules <- function(txt) {
-    uses_json <- grepl("jsonlite::fromJSON", txt, fixed = TRUE)
-    
-    datetime_rule <- extract_assignment(txt, "datetime")
-    headline_rule <- extract_assignment(txt, "headline")
-    author_rule   <- extract_assignment(txt, "author")
-    text_rule     <- extract_assignment(txt, "text")
-    
-    n_rules <- sum(!is.na(c(datetime_rule, headline_rule, author_rule, text_rule)))
-    
-    list(
-      rules = list(
-        datetime = list(selector = datetime_rule, type = if (uses_json) "json" else "html"),
-        headline = list(selector = headline_rule, type = if (uses_json) "json" else "html"),
-        author   = list(selector = author_rule,   type = if (uses_json) "json" else "html"),
-        text     = list(selector = text_rule,     type = if (uses_json) "json" else "html"),
-        uses_json = uses_json
-      ),
-      stats = list(
-        uses_json = uses_json,
-        n_parse_rules_extracted = n_rules,
-        success = (n_rules == 4)
-      )
-    )
-  }
+  # List available scripts for debugging
+  available_scripts <- list.files(r_dir, pattern = "^deliver_.*\\.R$")
+  message(sprintf("Found %d deliver scripts in repository", length(available_scripts)))
   
-  # Storage objects 
-  rules <- list()                    # named by cleaned domain later
+  # Step 2: Extract parsing rules from each script
+  message("\n=== Step 2: Extracting parsing rules ===")
+  
+  # Initialize storage
+  parser_rules <- list()
   overview_dt <- data.table(
     domain = character(),
+    extraction_success = logical(),
+    has_complex_logic = logical(),
     uses_json = logical(),
-    n_parse_rules_extracted = integer(),
-    success = logical()
+    error_message = character()
   )
-  ok <- 0L; fail <- 0L
   
-  # Fetch & process Paperboy scripts
-  message("\nFetching parser rules from paperboy repository...")
-  
-  for (d_full in domains_full) {
-    d_clean <- sub("\\..*$", "", d_full)          # cleaned name for storage
-    
-    raw_url <- sprintf(
-      "https://raw.githubusercontent.com/JBGruber/paperboy/main/R/%s",
-      domain_to_file(d_full)                      # uses full (possibly .de-appended) domain
-    )
-    
-    txt <- tryCatch(
-      httr::content(httr::GET(raw_url), as = "text", encoding = "UTF-8"),
-      error = function(e) NULL
-    )
-    
-    if (is.null(txt)) {
-      message(sprintf("✗ %s – download failed", d_full))
-      fail <- fail + 1L
+  # Function to extract complete parsing logic
+  extract_complete_parsing_logic <- function(script_content, domain_name) {
+    tryCatch({
+      # Find the function definition line
+      func_start_idx <- grep("pb_deliver_paper\\.[^ ]+ <- function\\(", script_content)[1]
+      if (is.na(func_start_idx)) {
+        return(list(success = FALSE, error = "Could not find function definition (pb_deliver_paper...)"))
+      }
       
-      overview_dt <- rbind(overview_dt, data.table(
-        domain = d_clean,
-        uses_json = NA,
-        n_parse_rules_extracted = 0L,
-        success = FALSE
+      # Find the opening brace of the function body
+      search_area <- script_content[func_start_idx:length(script_content)]
+      open_brace_rel_idx <- grep("\\{", search_area)[1]
+      if (is.na(open_brace_rel_idx)) {
+        return(list(success = FALSE, error = "Could not find opening brace of function body"))
+      }
+      open_brace_idx <- func_start_idx + open_brace_rel_idx - 1
+      
+      # Find matching closing brace by counting
+      close_brace_idx <- 0
+      balance <- 0
+      for (i in open_brace_idx:length(script_content)) {
+        line <- script_content[i]
+        balance <- balance + stringr::str_count(line, "\\{") - stringr::str_count(line, "\\}")
+        if (balance == 0) {
+          close_brace_idx <- i
+          break
+        }
+      }
+      
+      if (close_brace_idx == 0) {
+        return(list(success = FALSE, error = "Could not find closing brace of function body"))
+      }
+      
+      # Extract function body
+      body_lines <- script_content[(open_brace_idx + 1):(close_brace_idx - 1)]
+      
+      # Clean extracted code
+      body_lines <- body_lines[!grepl("pb_tick\\(x, verbose, pb\\)", body_lines)]
+      body_lines <- body_lines[!grepl("read_html\\s*\\(", body_lines)]
+      
+      # Analyze code for specific features
+      uses_json <- any(grepl("jsonlite::fromJSON|fromJSON", body_lines))
+      has_complex <- any(grepl("if\\s*\\(|else\\s*\\{|switch\\s*\\(", body_lines))
+      
+      # Build the wrapper function
+      custom_s_n_list_def <- "
+    s_n_list <- function(datetime_val = NA_character_, author_val = NA_character_, headline_val = NA_character_, text_val = NA_character_) {
+      datetime <<- datetime_val
+      author <<- author_val
+      headline <<- headline_val
+      text <<- text_val
+      invisible(NULL)
+    }
+    "
+      
+      wrapper_function_text <- sprintf(
+        "function(html) {
+        # Required libraries for execution
+        library(rvest)
+        library(lubridate)
+        library(jsonlite)
+        library(stringr)
+
+        # Initialize variables
+        datetime <- NA_character_
+        author <- NA_character_
+        headline <- NA_character_
+        text <- NA_character_
+
+        # Define helper function
+        %s
+
+        # Execute parsing logic within a tryCatch block
+        tryCatch({
+          %s
+          # Return extracted data as a list
+          list(
+            datetime = as.character(datetime),
+            author = as.character(author),
+            headline = as.character(headline),
+            text = as.character(text)
+          )
+        }, error = function(e) {
+          # Return NAs and error message on failure
+          list(
+            datetime = NA_character_,
+            author = NA_character_,
+            headline = NA_character_,
+            text = NA_character_,
+            error = paste('Parser execution error:', as.character(e$message))
+          )
+        })
+      }",
+        custom_s_n_list_def,
+        paste(body_lines, collapse = "\n")
+      )
+      
+      # Evaluate the wrapper text to a real function
+      parsing_func <- eval(parse(text = wrapper_function_text))
+      
+      # Return the successful result
+      return(list(
+        success = TRUE,
+        func = parsing_func,
+        uses_json = uses_json,
+        has_complex_logic = has_complex,
+        raw_code = wrapper_function_text
       ))
       
-      rules[[d_clean]] <- list(
-        datetime  = list(selector = NA_character_, type = "html"),
-        headline  = list(selector = NA_character_, type = "html"),
-        author    = list(selector = NA_character_, type = "html"),
-        text      = list(selector = NA_character_, type = "html"),
-        uses_json = FALSE
+    }, error = function(e) {
+      # Catch unexpected errors during extraction
+      return(list(
+        success = FALSE,
+        error = paste("Unexpected error in extract_complete_parsing_logic:", as.character(e$message))
+      ))
+    })
+  }
+  
+  
+  # Process each domain
+  successful_count <- 0
+  failed_count <- 0
+  
+  for (d_full in domains_full) {
+    d_clean <- sub("\\..*$", "", d_full)
+    message(sprintf("\nProcessing: %s", d_full))
+    
+    # Construct file path
+    script_filename <- domain_to_file(d_full)
+    script_file <- file.path(paperboy_git_path, "R", script_filename)
+    
+    if (!file.exists(script_file)) {
+      message(sprintf("  ? Script file not found: %s", script_filename))
+      
+      # Try to find similar files
+      r_dir <- file.path(paperboy_git_path, "R")
+      similar_files <- list.files(r_dir, pattern = gsub("_de\\.R$", "", script_filename))
+      if (length(similar_files) > 0) {
+        message(sprintf("    Similar files found: %s", paste(similar_files, collapse = ", ")))
+      }
+      
+      failed_count <- failed_count + 1
+      
+      # Add to overview
+      overview_dt <- rbind(overview_dt, data.table(
+        domain = d_clean,
+        extraction_success = FALSE,
+        has_complex_logic = NA,
+        uses_json = NA,
+        error_message = "Script file not found"
+      ))
+      
+      # Store empty rule
+      parser_rules[[d_clean]] <- list(
+        success = FALSE,
+        error = "Script file not found"
       )
+      
       next
     }
     
-    extraction_result <- extract_rules(txt)
-    rules[[d_clean]] <- extraction_result$rules
+    # Read script content
+    script_content <- readLines(script_file, warn = FALSE)
     
-    overview_dt <- rbind(overview_dt, data.table(
-      domain = d_clean,
-      uses_json = extraction_result$stats$uses_json,
-      n_parse_rules_extracted = extraction_result$stats$n_parse_rules_extracted,
-      success = extraction_result$stats$success
-    ))
+    # Extract parsing logic
+    extraction_result <- extract_complete_parsing_logic(script_content, d_clean)
     
-    ok <- ok + 1L
-    if (extraction_result$stats$success) {
-      message(sprintf("✓ %s – all rules extracted successfully", d_full))
+    if (extraction_result$success) {
+      successful_count <- successful_count + 1
+      message(sprintf("  ? Successfully extracted (JSON: %s, Complex: %s)",
+                      extraction_result$uses_json,
+                      extraction_result$has_complex_logic))
+      
+      # Store the parsing function
+      parser_rules[[d_clean]] <- list(
+        success = TRUE,
+        parse_function = extraction_result$func,
+        uses_json = extraction_result$uses_json,
+        has_complex_logic = extraction_result$has_complex_logic,
+        raw_code = extraction_result$raw_code
+      )
+      
+      # Add to overview
+      overview_dt <- rbind(overview_dt, data.table(
+        domain = d_clean,
+        extraction_success = TRUE,
+        has_complex_logic = extraction_result$has_complex_logic,
+        uses_json = extraction_result$uses_json,
+        error_message = NA_character_
+      ))
+      
     } else {
-      message(sprintf("⚠ %s – partial extraction (%d/4 rules found)",
-                      d_full, extraction_result$stats$n_parse_rules_extracted))
+      failed_count <- failed_count + 1
+      message(sprintf("  ? Extraction failed: %s", extraction_result$error))
+      
+      # Store error information
+      parser_rules[[d_clean]] <- list(
+        success = FALSE,
+        error = extraction_result$error
+      )
+      
+      # Add to overview
+      overview_dt <- rbind(overview_dt, data.table(
+        domain = d_clean,
+        extraction_success = FALSE,
+        has_complex_logic = NA,
+        uses_json = NA,
+        error_message = extraction_result$error
+      ))
     }
   }
   
-  # Save results 
-  saveRDS(rules, output_rds)
+  # Step 3: Save results
+  message("\n=== Step 3: Saving results ===")
+  
+  # Save parser rules
+  saveRDS(parser_rules, output_rds)
+  message(sprintf("Parser rules saved to: %s", output_rds))
+  
+  # Save overview
   saveRDS(overview_dt, overview_rds)
-  message(sprintf("\nParser rules saved to: %s", output_rds))
   message(sprintf("Overview saved to: %s", overview_rds))
   
-  # Summary 
-  message("\n=== Parser Rules Extraction Summary ===")
-  message(sprintf("Total unique domains processed: %d", length(domains_full)))
-  message(sprintf("Paperboy R scripts successfully loaded: %d", ok))
-  message(sprintf("Failed downloads: %d", fail))
-  if (nrow(overview_dt) > 0) {
-    message(sprintf("\nExtraction success rate: %.1f%%",
-                    sum(overview_dt$success, na.rm = TRUE) / nrow(overview_dt) * 100))
-    message(sprintf("Domains using JSON parsing: %d",
-                    sum(overview_dt$uses_json, na.rm = TRUE)))
-    message(sprintf("Average rules extracted per domain: %.2f",
-                    mean(overview_dt$n_parse_rules_extracted)))
+  # Summary statistics
+  message("\n=== Extraction Summary ===")
+  message(sprintf("Total domains processed: %d", length(domains_full)))
+  message(sprintf("Successfully extracted: %d (%.1f%%)",
+                  successful_count,
+                  successful_count / length(domains_full) * 100))
+  message(sprintf("Failed extractions: %d", failed_count))
+  
+  if (nrow(overview_dt) > 0 && successful_count > 0) {
+    json_count <- sum(overview_dt$uses_json, na.rm = TRUE)
+    complex_count <- sum(overview_dt$has_complex_logic, na.rm = TRUE)
     
-    incomplete_domains <- overview_dt[success == FALSE & n_parse_rules_extracted > 0]$domain
-    if (length(incomplete_domains) > 0) {
-      message("\nDomains with incomplete rule extraction:")
-      for (dom in incomplete_domains) {
-        n_rules <- overview_dt[domain == dom]$n_parse_rules_extracted
-        message(sprintf("  - %s (%d/4 rules)", dom, n_rules))
-      }
+    message(sprintf("\nParsing characteristics:"))
+    message(sprintf("  - Using JSON: %d domains (%.1f%%)",
+                    json_count,
+                    json_count / successful_count * 100))
+    message(sprintf("  - Complex logic (if/else): %d domains (%.1f%%)",
+                    complex_count,
+                    complex_count / successful_count * 100))
+  }
+  
+  # List failed domains for manual inspection
+  failed_domains <- overview_dt[extraction_success == FALSE]$domain
+  if (length(failed_domains) > 0) {
+    message("\nFailed domains requiring manual attention:")
+    for (dom in failed_domains) {
+      error_msg <- overview_dt[domain == dom]$error_message
+      message(sprintf("  - %s: %s", dom, error_msg))
     }
   }
   
-  invisible(list(rules = rules, overview = overview_dt))
+  invisible(list(
+    parser_rules = parser_rules,
+    overview = overview_dt
+  ))
 }
 
 # Run once 
-# setup_parser_rules()
+setup_parser_rules()
 
 rm(setup_parser_rules)
 # Load saved rules and overview
-# parser_rules <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parsing_config/06_parser_rules_fetched.rds")
-# parser_overview <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parsing_config/06_parser_overview.rds")
+parser_rules <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parsing_config/06_parser_rules_fetched.rds")
+parser_overview <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parsing_config/06_parser_overview.rds")
 
 
 
@@ -873,324 +1033,146 @@ rm(setup_parser_rules)
 
 
 
-# 3. Initialize parsing function. 
+# 3. Define main parsing rule 
 func_06_parse_html <- local({
-  # Private cache variables for parsing rules
+  
+  # --- Private Caching Environment ---
   .parser_rules_cache <- NULL
   .paywall_rules_cache <- NULL
   
-  # Return the main function
-  function(response_result, chunk_name = current_chunk) {
-    
-    # unified return object 
-    make_ret <- function(success_flag, data = NULL, err = NULL, msg = "") {
-      list(
-        success           = success_flag,
-        action            = "parse",                   # constant
-        response_analysis = if (success_flag) "valid" else "invalid",
-        parse_result      = list(
-          success = success_flag,
-          data    = data,
-          error   = err
-        ),
-        message = msg
-      )
+  # --- Internal helper function to load rules if needed ---
+  .load_cached_rules <- function() {
+    paths <- get_module_paths()
+    if (is.null(.parser_rules_cache)) {
+      parser_rules_path <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
+      if (!file.exists(parser_rules_path)) stop("FATAL: Parser rule file not found: ", parser_rules_path)
+      message("Loading and caching content parser rules...")
+      .parser_rules_cache <<- readRDS(parser_rules_path)
     }
-    
-    # Function to load and cache parsing rules
-    .load_cached_rules <- function() {
-      if (is.null(.parser_rules_cache) || is.null(.paywall_rules_cache)) {
-        paths <- get_module_paths()
-        
-        # read RDS files
-        parser_rules_path  <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
-        if (length(parser_rules_path) == 0 || !file.exists(parser_rules_path))
-          stop(sprintf("Parser rules not found at: %s", parser_rules_path))
-        .parser_rules_cache <<- readRDS(parser_rules_path)
-        
-        paywall_rules_path <- file.path(paths$parsing_config, "06_paywall_rules_generated.rds")
-        if (!file.exists(paywall_rules_path))
-          stop("Paywall rules not found at: ", paywall_rules_path)
-        .paywall_rules_cache <<- readRDS(paywall_rules_path)
-        
-        # harmonise list names 
-        fix_names <- function(nms) {
-          vapply(nms, function(n) {
-            if (grepl("\\.", n))           return(n)              # already has TLD
-            if (n == "faz")                  return("faz.net")   # special case
-            paste0(n, ".de")
-          }, character(1))
-        }
-        names(.parser_rules_cache)  <<- fix_names(names(.parser_rules_cache))
-        names(.paywall_rules_cache) <<- fix_names(names(.paywall_rules_cache))
-        
-        message("Parsing rules loaded, cached, and domain names normalised")
-      }
-      list(parser = .parser_rules_cache, paywall = .paywall_rules_cache)
+    if (is.null(.paywall_rules_cache)) {
+      paywall_rules_path <- file.path(paths$parsing_config, "06_paywall_rules_generated.rds")
+      if (!file.exists(paywall_rules_path)) stop("FATAL: Paywall rule file not found: ", paywall_rules_path)
+      message("Loading and caching paywall rules...")
+      .paywall_rules_cache <<- readRDS(paywall_rules_path)
     }
-    
-    # Helper function to check for paywall markers
-    .check_paywall_markers <- function(html_parsed, paywall_markers) {
-      # Return FALSE immediately if no markers to check
-      if (length(paywall_markers) == 0) {
-        return(FALSE)
+  }
+  
+  # --- Internal helper function to check for paywall markers ---
+  .check_paywall_markers <- function(html_parsed, paywall_markers) {
+    if (length(paywall_markers) == 0) return(FALSE)
+    if (!is.null(paywall_markers$css_selectors)) {
+      for (selector in paywall_markers$css_selectors) {
+        if (length(html_nodes(html_parsed, selector)) > 0) return(TRUE)
       }
-      
-      # Check CSS selectors
-      if (!is.null(paywall_markers$css_selectors)) {
-        for (selector in paywall_markers$css_selectors) {
-          # Try to find nodes matching the selector
-          nodes <- tryCatch({
-            html_nodes(html_parsed, selector)
-          }, error = function(e) NULL)
-          
-          # If any nodes found, paywall detected
-          if (!is.null(nodes) && length(nodes) > 0) {
-            return(TRUE)
-          }
-        }
-      }
-      
-      # Check script blocks for patterns
-      if (!is.null(paywall_markers$script_blocks)) {
-        # Get all script content
-        script_nodes <- html_nodes(html_parsed, "script")
-        all_scripts <- paste(html_text(script_nodes), collapse = " ")
-        
-        # Check each script pattern
-        for (pattern in paywall_markers$script_blocks) {
-          if (grepl(pattern, all_scripts, ignore.case = TRUE, fixed = TRUE)) {
-            return(TRUE)
-          }
-        }
-      }
-      
-      # Check meta tags
-      if (!is.null(paywall_markers$meta_tags)) {
-        for (meta_selector in paywall_markers$meta_tags) {
-          nodes <- tryCatch({
-            html_nodes(html_parsed, meta_selector)
-          }, error = function(e) NULL)
-          
-          if (!is.null(nodes) && length(nodes) > 0) {
-            return(TRUE)
-          }
-        }
-      }
-      
-      # No paywall markers found
-      return(FALSE)
     }
-    
-    # Helper function to apply parser rules
-    .apply_parser_rule <- function(html_parsed, rule, json_df = NULL) {
-      # Check if rule is valid
-      if (is.null(rule) || is.na(rule$selector) || is.null(rule$selector)) {
-        return(NA_character_)
+    if (!is.null(paywall_markers$script_blocks)) {
+      all_scripts <- paste(html_text(html_nodes(html_parsed, "script")), collapse = " ")
+      for (pattern in paywall_markers$script_blocks) {
+        if (grepl(pattern, all_scripts, ignore.case = TRUE, fixed = TRUE)) return(TRUE)
       }
-      
-      # Try to evaluate the rule
-      result <- tryCatch({
-        # Suppress warnings during evaluation
-        suppressWarnings({
-          if (!is.null(rule$type) && rule$type == "json" && !is.null(json_df)) {
-            # Evaluate JSON-based rule
-            eval(parse(text = rule$selector))
-          } else {
-            # Evaluate HTML-based rule
-            # Make html available for the eval
-            html <- html_parsed
-            eval(parse(text = rule$selector))
-          }
-        })
-      }, error = function(e) {
-        NA_character_
-      })
-      
-      # Handle NULL or empty results
-      if (is.null(result) || length(result) == 0) {
-        return(NA_character_)
-      }
-      
-      # Take first element if multiple
-      if (length(result) > 1) {
-        result <- result[1]
-      }
-      
-      # Convert to character
-      result <- tryCatch(
-        as.character(result),
-        error = function(e) NA_character_
-      )
-      
-      # Check for empty string
-      if (is.na(result) || identical(result, "") || identical(result, character(0))) {
-        return(NA_character_)
-      }
-      
-      return(result)
     }
-    
-    # Main Function logic
-    
-    # Validate input
-    if (!is.list(response_result) || !response_result$success) {
-      warning("Invalid response result provided to parser")
-      return(make_ret(FALSE, NULL, "bad_input", "Response result invalid"))
+    if (!is.null(paywall_markers$meta_tags)) {
+      for (meta_selector in paywall_markers$meta_tags) {
+        if (length(html_nodes(html_parsed, meta_selector)) > 0) return(TRUE)
+      }
     }
+    return(FALSE)
+  }
+  
+  # --- NEW: Helper function to sanitize values for data.table assignment ---
+  .sanitize_value <- function(value) {
+    # If value is NULL or a zero-length vector, return a single NA_character_
+    if (is.null(value) || length(value) == 0) {
+      return(NA_character_)
+    }
+    # Otherwise, return the value as a character
+    return(as.character(value))
+  }
+  
+  
+  # --- The main function that is returned and exposed externally ---
+  function(response_result, chunk_name) {
     
-    # Extract HTML content from response
+    .load_cached_rules()
+    
+    request_info <- response_result$request_info
+    input_info <- list(
+      id = request_info$id,
+      domain = request_info$domain,
+      url = request_info$url
+    )
+    
     html_content <- tryCatch({
-      resp_body_string(response_result$httr2_response)
+      httr2::resp_body_string(response_result$httr2_response)
     }, error = function(e) {
-      warning("Failed to extract HTML content from response")
-      return(make_ret(FALSE, NULL, "html_extract_fail", "Couldn't extract body string"))
+      func_10_append_error("html_extraction_failed", input_info, chunk_name)
+      return(NULL)
     })
     
-    # Extract information from response
-    request_info <- response_result$request_info
-    url    <- request_info$url
-    domain <- request_info$domain
+    if (is.null(html_content) || nchar(html_content) == 0) {
+      return(list(success = FALSE, data = NULL, reason = "empty_html_content"))
+    }
     
-    input_info <- list(id = request_info$id, domain = domain, url = url)
-    
-    # Initialize temporary data.table
     temp_dt <- data.table(
-      domain = domain,
-      url = url,
-      timestamp_scraped = Sys.time(),
+      id = as.integer(request_info$id),
+      domain = as.character(request_info$domain),
+      url = as.character(request_info$url),
+      timestamp_scraped = as.POSIXct(request_info$request_timestamp),
       date_time = NA_character_,
       author = NA_character_,
       headline = NA_character_,
       text = NA_character_,
-      paywall = NA,
-      bot_detect = FALSE  # Default to FALSE for now
+      paywall = NA
     )
     
-    # Load cached rules
-    rules <- .load_cached_rules()
-    parser_rules  <- rules$parser[[domain]]
-    paywall_rules <- rules$paywall[[domain]]
+    domain_clean <- sub("\\..*$", "", temp_dt$domain)
+    parser_entry <- .parser_rules_cache[[domain_clean]]
+    paywall_entry <- .paywall_rules_cache[[domain_clean]]
     
-    if (is.null(parser_rules)) {
-      func_10_append_error(error_reason = paste("No parser rules for domain:", domain),
-                           input_info   = input_info,
-                           chunk_name   = chunk_name)
-      return(make_ret(FALSE, NULL, "no_rules", "Missing parser rules"))
+    html_parsed <- tryCatch(rvest::read_html(html_content), error = function(e) NULL)
+    
+    if (is.null(html_parsed)) {
+      func_10_append_error("html_parse_failed", input_info, chunk_name)
+      return(list(success = FALSE, data = NULL, reason = "html_parse_failed"))
     }
     
-    # Parse HTML
-    html_parsed <- tryCatch({
-      read_html(html_content)
-    }, error = function(e) {
-      func_10_append_error(error_reason = paste("HTML parsing failed:", e$message),
-                           input_info   = input_info,
-                           chunk_name   = chunk_name)
-      return(make_ret(FALSE, NULL, "html_parse_fail", "HTML parsing failed"))
-    })
-    
-    # STEP 1: Check for bot detection (placeholder for now)
-    
-    
-    
-    # temp_dt$bot_detect remains FALSE
-    
-    # STEP 2: Check for paywall
-    if (!is.null(paywall_rules)) {
-      if (isFALSE(paywall_rules$has_paywall)) {
+    if (!is.null(paywall_entry)) {
+      if (isFALSE(paywall_entry$has_paywall)) {
         temp_dt$paywall <- FALSE
       } else {
-        temp_dt$paywall <- .check_paywall_markers(html_parsed, paywall_rules$paywall_markers)
+        temp_dt$paywall <- .check_paywall_markers(html_parsed, paywall_entry$paywall_markers)
       }
     } else {
       temp_dt$paywall <- FALSE
     }
     
-    # STEP 3: Extract article elements
-    # Check if domain uses JSON parsing
-    json_df <- NULL
-    if (!is.null(parser_rules$uses_json) && parser_rules$uses_json) {
-      # Extract JSON-LD content
-      json_txt <- tryCatch({
-        html_parsed %>%
-          html_elements("script[type='application/ld+json']") %>%
-          html_text()
-      }, error = function(e) character(0))
+    if (!is.null(parser_entry) && isTRUE(parser_entry$success)) {
+      parsing_func <- parser_entry$parse_function
+      extracted_data <- tryCatch(parsing_func(html_parsed), error = function(e) list(error = e$message))
       
-      # Parse JSON if found
-      if (length(json_txt) > 0 && nchar(json_txt[1]) > 0) {
-        json_df <- tryCatch({
-          fromJSON(json_txt[1])
-        }, error = function(e) NULL)
+      if (is.null(extracted_data$error)) {
+        # FIX: Sanitize each value before assigning it to the data.table
+        temp_dt$date_time <- .sanitize_value(extracted_data$datetime)
+        temp_dt$author    <- .sanitize_value(extracted_data$author)
+        temp_dt$headline  <- .sanitize_value(extracted_data$headline)
+        temp_dt$text      <- .sanitize_value(extracted_data$text)
       }
     }
     
-    # Apply parser rules to extract fields
-    temp_dt$date_time <- .apply_parser_rule(html_parsed, parser_rules$datetime, json_df)
-    temp_dt$author <- .apply_parser_rule(html_parsed, parser_rules$author, json_df)
-    temp_dt$headline <- .apply_parser_rule(html_parsed, parser_rules$headline, json_df)
-    temp_dt$text <- .apply_parser_rule(html_parsed, parser_rules$text, json_df)
+    is_na_headline <- is.na(temp_dt$headline) || nchar(trimws(temp_dt$headline)) == 0
+    is_na_text <- is.na(temp_dt$text) || nchar(trimws(temp_dt$text)) == 0
     
-    # Format datetime if successfully extracted
-    if (!is.na(temp_dt$date_time)) {
-      formatted_date <- suppressWarnings(tryCatch({
-        dt <- as_datetime(temp_dt$date_time)
-        if (!is.na(dt)) {
-          as.character(dt)
-        } else {
-          temp_dt$date_time
-        }
-      }, error = function(e) {
-        temp_dt$date_time
-      }))
-      temp_dt$date_time <- formatted_date
+    if (!is_na_headline && !is_na_text) {
+      # The 'parse_result' argument in the append function expects a data.table or list
+      func_10_append_output(temp_dt, input_info, list(), chunk_name)
+      return(list(success = TRUE, data = temp_dt))
+    } else if (isTRUE(temp_dt$paywall)) {
+      func_10_append_error("paywalled_content", input_info, chunk_name)
+      return(list(success = FALSE, data = temp_dt, reason = "paywalled_content"))
+    } else {
+      # The 'parse_result' argument here expects the data that was attempted to be parsed
+      func_10_append_parse_error(temp_dt, input_info, html_content, chunk_name)
+      return(list(success = FALSE, data = temp_dt, reason = "missing_fields"))
     }
-    
-    # STEP 4: Check results and route to appropriate function
-    # Check if bot detected
-    if (temp_dt$bot_detect) {
-      # Bot detected - send to retry
-      func_10_append_retry(
-        retry_reason = "bot_detected",
-        url = url,
-        chunk_name = chunk_name
-      )
-      return(invisible(FALSE))
-    }
-    
-    # Count NA fields 
-    na_count <- sum(is.na(temp_dt[, .(date_time, author, headline, text)]))
-    
-    # Build parse_result list 
-    parse_result <- list(
-      date_time = temp_dt$date_time,
-      author    = temp_dt$author,
-      headline  = temp_dt$headline,
-      text      = temp_dt$text,
-      paywall   = temp_dt$paywall
-    )
-    
-    # Routing: success / errors 
-    if (na_count == 0) {
-      func_10_append_output(parse_result  = parse_result,
-                            input_info    = input_info,
-                            response_info = list(),
-                            chunk_name    = chunk_name)
-      return(make_ret(TRUE, parse_result, NULL, "Parsed OK"))
-    }
-    
-    if (na_count > 0 && isTRUE(temp_dt$paywall)) {
-      func_10_append_error(error_reason = "paywalled_content",
-                           input_info   = input_info,
-                           chunk_name   = chunk_name)
-      return(make_ret(FALSE, parse_result, "paywalled_content", "Paywall detected, missing fields"))
-    }
-    
-    # Missing fields but no paywall 
-    func_10_append_parse_error(parse_result = parse_result,
-                               input_info   = input_info,
-                               html_content = html_content,
-                               chunk_name   = chunk_name)
-    return(make_ret(FALSE, parse_result, "missing_fields", "Missing one or more fields"))
   }
 })
