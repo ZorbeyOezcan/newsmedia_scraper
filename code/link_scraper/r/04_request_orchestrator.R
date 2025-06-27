@@ -374,7 +374,7 @@ func_04_check_domain_exhausted <- function(domain) {
 
 
 
-# 6. Function to prepare request package for module 05 - main function 
+# 6. Function to prepare request package for module 05 - main function
 func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness_level = 1) {
   # Get active session for domain
   session_result <- func_04_get_active_session(domain)
@@ -390,9 +390,17 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
   # Get the active session
   active_session <- session_result$session
   
-  # Determine if this is the first request for this session
-  is_first_request <- ifelse(is.null(active_session$first_request), TRUE, active_session$first_request)
+  # FINAL FIX: Use the variable names expected by the logger ('10_log_manager.R')
   
+  # Initialize and increment 'request_count'
+  if (is.null(active_session$request_count)) {
+    active_session$request_count <- 0L
+  }
+  active_session$request_count <- active_session$request_count + 1L
+  
+  # Determine and store 'first_request'
+  is_first_request <- (active_session$request_count == 1)
+  active_session$first_request <- is_first_request # Note: name is 'first_request', not 'is_first_request'
   
   # Update session headers based on context
   active_session <- func_04_update_session_headers(
@@ -402,11 +410,10 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
     current_domain = domain
   )
   
-  # Update the session in the global pool with the modified headers
+  # Update the session in the global pool with the modified object
   pool <- get("session_pool", envir = .GlobalEnv)
   session_name <- active_session$id
   
-  # Find which session this is for the domain
   domain_sessions <- names(pool[[domain]])
   for (s_name in domain_sessions) {
     if (pool[[domain]][[s_name]]$id == session_name) {
@@ -420,7 +427,7 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
   request_params <- list(
     url = url,
     domain = domain,
-    session = active_session,
+    session = active_session, # Pass the fully updated session
     aggressiveness = aggressiveness_level,
     timestamp = Sys.time()
   )
@@ -432,6 +439,3 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
     message = sprintf("Request prepared for %s using %s", domain, active_session$id)
   ))
 }
-
-
-

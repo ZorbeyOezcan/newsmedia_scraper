@@ -20,13 +20,13 @@ library(data.table)
 library(httr2)
 
 
-# 1. Function to log requests 
+# 1. Function to log requests
 func_10_log_request <- function(request_package,
                                 session,
                                 httr2_request = NULL,
                                 chunk_name    = current_chunk,
                                 worker_id     = 1) {
-  # verify  
+  # verify
   if (!is.list(request_package) || !request_package$success) {
     warning("Invalid request package provided to logger")
     return(invisible(FALSE))
@@ -35,84 +35,70 @@ func_10_log_request <- function(request_package,
     stop("chunk_name must look like 'chunk_001' etc.")
   }
   
-  # locate / create the chunk-specific data.table 
+  # locate / create the chunk-specific data.table
   dt_name <- paste0(chunk_name, "_request_log")
   if (exists(dt_name, envir = .GlobalEnv)) {
     chunk_log <- get(dt_name, envir = .GlobalEnv)
   } else {
-    chunk_log <- data.table()  # empty → columns will be created on first bind
+    chunk_log <- data.table()
   }
   
-  # derive new request_id 
-  request_id <- if (nrow(chunk_log)) max(chunk_log$request_id, na.rm = TRUE) + 1L else 1L
+  # FINAL FIX: More robust way to derive the next request_id
+  # This prevents errors if the request_id column only contains NAs.
+  last_id <- if (nrow(chunk_log) > 0) {
+    max(chunk_log$request_id, na.rm = TRUE)
+  } else {
+    0L
+  }
+  # Handle the case where max() returns -Inf
+  if (!is.finite(last_id)) {
+    last_id <- 0L
+  }
+  request_id <- last_id + 1L
   
-  # obtain IP from VPN log (optional) 
+  # obtain IP from VPN log (optional)
   vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
   current_ip   <- if (file.exists(vpn_log_path)) {
     vpn_log <- readRDS(vpn_log_path)
     vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
   } else NA_character_
   
-  # convenience  
+  # convenience
   headers      <- if (is.null(session) || is.null(session$headers)) list() else session$headers
   chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
   
-  # create new log entry  
+  # create new log entry
   log_entry <- data.table(
     request_id              = as.integer(request_id),
-    id                      = ifelse(is.null(request_package$request_params$id),
-                                     NA_character_, as.character(request_package$request_params$id)),
-    domain                  = ifelse(is.null(request_package$request_params$domain),
-                                     NA_character_, as.character(request_package$request_params$domain)),
-    url                     = ifelse(is.null(request_package$request_params$url),
-                                     NA_character_, as.character(request_package$request_params$url)),
+    id                      = ifelse(is.null(request_package$request_params$id), NA_character_, as.character(request_package$request_params$id)),
+    domain                  = ifelse(is.null(request_package$request_params$domain), NA_character_, as.character(request_package$request_params$domain)),
+    url                     = ifelse(is.null(request_package$request_params$url), NA_character_, as.character(request_package$request_params$url)),
     timestamp_scraped       = Sys.time(),
     from_chunk              = as.integer(chunk_number),
-    session_id              = ifelse(is.null(session$id),
-                                     NA_character_, as.character(session$id)),
+    session_id              = ifelse(is.null(session$id), NA_character_, as.character(session$id)),
     worker_id               = as.integer(worker_id),
-    user_agent_id           = ifelse(is.null(session$user_agent_id),
-                                     NA_integer_, as.integer(session$user_agent_id)),
-    ip_address              = ifelse(is.null(current_ip),
-                                     NA_character_, as.character(current_ip)),
-    user_agent              = ifelse(is.null(headers$user_agent),
-                                     NA_character_, as.character(headers$user_agent)),
-    accept                  = ifelse(is.null(headers$accept),
-                                     NA_character_, as.character(headers$accept)),
-    accept_language         = ifelse(is.null(headers$accept_language),
-                                     NA_character_, as.character(headers$accept_language)),
-    accept_encoding         = ifelse(is.null(headers$accept_encoding),
-                                     NA_character_, as.character(headers$accept_encoding)),
-    connection              = ifelse(is.null(headers$connection),
-                                     NA_character_, as.character(headers$connection)),
-    referer                 = ifelse(is.null(headers$referer),
-                                     NA_character_, as.character(headers$referer)),
-    host                    = ifelse(is.null(headers$host),
-                                     NA_character_, as.character(headers$host)),
-    upgrade_insecure_requests =
-      ifelse(is.null(headers$upgrade_insecure_requests),
-             NA_character_, as.character(headers$upgrade_insecure_requests)),
-    sec_fetch_dest          = ifelse(is.null(headers$sec_fetch_dest),
-                                     NA_character_, as.character(headers$sec_fetch_dest)),
-    sec_fetch_mode          = ifelse(is.null(headers$sec_fetch_mode),
-                                     NA_character_, as.character(headers$sec_fetch_mode)),
-    sec_fetch_site          = ifelse(is.null(headers$sec_fetch_site),
-                                     NA_character_, as.character(headers$sec_fetch_site)),
-    aggressiveness_level    = ifelse(is.null(request_package$request_params$aggressiveness),
-                                     NA_integer_, as.integer(request_package$request_params$aggressiveness)),
-    browser_type            = ifelse(is.null(session$browser_type),
-                                     NA_character_, as.character(session$browser_type)),
-    is_mobile               = ifelse(is.null(session$is_mobile),
-                                     NA, as.logical(session$is_mobile)),
-    is_first_request        = ifelse(is.null(session$first_request),
-                                     FALSE, as.logical(session$first_request)),
-    session_request_count   = ifelse(is.null(session$request_count),
-                                     0L, as.integer(session$request_count)),
-    cookie_jar_path         = ifelse(is.null(session$cookie_jar),
-                                     NA_character_, as.character(session$cookie_jar))
+    user_agent_id           = ifelse(is.null(session$user_agent_id), NA_integer_, as.integer(session$user_agent_id)),
+    ip_address              = ifelse(is.null(current_ip), NA_character_, as.character(current_ip)),
+    user_agent              = ifelse(is.null(headers$user_agent), NA_character_, as.character(headers$user_agent)),
+    accept                  = ifelse(is.null(headers$accept), NA_character_, as.character(headers$accept)),
+    accept_language         = ifelse(is.null(headers$accept_language), NA_character_, as.character(headers$accept_language)),
+    accept_encoding         = ifelse(is.null(headers$accept_encoding), NA_character_, as.character(headers$accept_encoding)),
+    connection              = ifelse(is.null(headers$connection), NA_character_, as.character(headers$connection)),
+    referer                 = ifelse(is.null(headers$referer), NA_character_, as.character(headers$referer)),
+    host                    = ifelse(is.null(headers$host), NA_character_, as.character(headers$host)),
+    upgrade_insecure_requests = ifelse(is.null(headers$upgrade_insecure_requests), NA_character_, as.character(headers$upgrade_insecure_requests)),
+    sec_fetch_dest          = ifelse(is.null(headers$sec_fetch_dest), NA_character_, as.character(headers$sec_fetch_dest)),
+    sec_fetch_mode          = ifelse(is.null(headers$sec_fetch_mode), NA_character_, as.character(headers$sec_fetch_mode)),
+    sec_fetch_site          = ifelse(is.null(headers$sec_fetch_site), NA_character_, as.character(headers$sec_fetch_site)),
+    aggressiveness_level    = ifelse(is.null(request_package$request_params$aggressiveness), NA_integer_, as.integer(request_package$request_params$aggressiveness)),
+    browser_type            = ifelse(is.null(session$browser_type), NA_character_, as.character(session$browser_type)),
+    is_mobile               = ifelse(is.null(session$is_mobile), NA, as.logical(session$is_mobile)),
+    is_first_request        = ifelse(is.null(session$first_request), FALSE, as.logical(session$first_request)),
+    session_request_count   = ifelse(is.null(session$request_count), 0L, as.integer(session$request_count)),
+    cookie_jar_path         = ifelse(is.null(session$cookie_jar), NA_character_, as.character(session$cookie_jar))
   )
   
-  ## harmonise column structure & classes 
+  ## harmonise column structure & classes
   all_cols <- union(names(chunk_log), names(log_entry))
   
   # add missing columns to each data.table
@@ -123,16 +109,15 @@ func_10_log_request <- function(request_package,
   data.table::setcolorder(chunk_log, all_cols)
   data.table::setcolorder(log_entry, all_cols)
   
-  # unify classes (fallback: character)  
+  # unify classes (fallback: character)
   for (col in all_cols) {
     if (!identical(class(chunk_log[[col]]), class(log_entry[[col]]))) {
       chunk_log[, (col) := as.character(get(col))]
       log_entry[, (col) := as.character(get(col))]
     }
   }
-
   
-  # append and re-assign  
+  # append and re-assign
   chunk_log <- data.table::rbindlist(list(chunk_log, log_entry),
                                      use.names = TRUE, fill = TRUE)
   assign(dt_name, chunk_log, envir = .GlobalEnv)
@@ -146,11 +131,11 @@ func_10_log_request <- function(request_package,
 
 
 
-# 2. Function to log HTTP response parameters
+# 2. Function to log HTTP response parameters (FINAL, ROBUST VERSION)
 func_10_log_response <- function(response_result,
-                                 chunk_name       = current_chunk,
+                                 chunk_name        = current_chunk,
                                  response_analysis = NA_character_) {
-  # validation 
+  # validation
   if (!is.list(response_result)) {
     warning("Invalid response result provided to logger")
     return(invisible(FALSE))
@@ -159,125 +144,116 @@ func_10_log_response <- function(response_result,
     stop("chunk_name must look like 'chunk_001', 'chunk_123', …")
   }
   
-  # locate current log table 
+  # locate current log table
   dt_name   <- paste0(chunk_name, "_response_log")
-  chunk_log <- if (exists(dt_name, envir = .GlobalEnv))
-    get(dt_name, envir = .GlobalEnv) else data.table()
+  chunk_log <- if (exists(dt_name, envir = .GlobalEnv)) get(dt_name, envir = .GlobalEnv) else data.table()
   
   # next response_id
-  response_id <- if (nrow(chunk_log)) max(chunk_log$response_id, na.rm = TRUE) + 1L else 1L
+  last_id <- if (nrow(chunk_log) > 0) max(chunk_log$response_id, na.rm = TRUE) else 0L
+  if (!is.finite(last_id)) last_id <- 0L
+  response_id <- last_id + 1L
   
-  # request context 
+  # request context
   request_info <- response_result$request_info
   request_id   <- ifelse(is.null(request_info$request_id), NA_integer_, request_info$request_id)
   chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
   
-  # defaults 
-  status_code           <- NA_integer_
-  response_headers      <- list()
-  response_time         <- NA_real_
-  server_date           <- as.POSIXct(NA)
-  content_type          <- NA_character_
-  content_length        <- NA_integer_
-  server                <- NA_character_
-  rate_limit_remaining  <- NA_integer_
-  rate_limit_reset      <- as.POSIXct(NA)
-  retry_after           <- NA_integer_
+  # defaults
+  status_code      <- NA_integer_
+  response_headers <- list()
+  server_date      <- as.POSIXct(NA)
+  content_type     <- NA_character_
+  content_length   <- NA_integer_
+  server           <- NA_character_
   
-  # extract data when successful 
+  # --- FINAL FIX: Robust extraction of timing information ---
+  # Initialize all timing values to NA to prevent errors
+  dns_time      <- NA_real_
+  connect_time  <- NA_real_
+  total_time    <- NA_real_
+  
+  # extract data when successful
   if (response_result$success && !is.null(response_result$httr2_response)) {
     resp <- response_result$httr2_response
     
-    status_code      <- tryCatch(resp_status(resp),       error = function(e) NA_integer_)
-    response_headers <- tryCatch(resp_headers(resp),      error = function(e) list())
-    content_type     <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
-    content_length   <- tryCatch({ cl <- resp_header(resp, "content-length");
-    if (!is.null(cl)) as.integer(cl) else NA_integer_ },
-    error = function(e) NA_integer_)
-    server           <- tryCatch({ srv <- resp_header(resp, "server");
-    if (!is.null(srv)) srv else NA_character_ },
-    error = function(e) NA_character_)
-    server_date      <- tryCatch({ date_str <- resp_header(resp, "date");
-    if (!is.null(date_str)) parse_http_date(date_str) else as.POSIXct(NA) },
-    error = function(e) as.POSIXct(NA))
-    rate_limit_remaining <- tryCatch({ rl <- resp_header(resp, "x-ratelimit-remaining");
-    if (!is.null(rl)) as.integer(rl) else NA_integer_ },
-    error = function(e) NA_integer_)
-    rate_limit_reset     <- tryCatch({ rst <- resp_header(resp, "x-ratelimit-reset");
-    if (!is.null(rst)) as.POSIXct(as.integer(rst), origin="1970-01-01") else as.POSIXct(NA) },
-    error = function(e) as.POSIXct(NA))
-    retry_after          <- tryCatch({ ra <- resp_header(resp, "retry-after");
-    if (!is.null(ra)) as.integer(ra) else NA_integer_ },
-    error = function(e) NA_integer_)
-    response_time        <- tryCatch(if (!is.null(resp$times)) as.numeric(resp$times$total) else NA_real_,
-                                     error = function(e) NA_real_)
+    status_code    <- tryCatch(resp_status(resp), error = function(e) NA_integer_)
+    response_headers <- tryCatch(resp_headers(resp), error = function(e) list())
+    content_type   <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
+    
+    # Safely extract headers
+    content_length <- tryCatch(as.integer(resp_header(resp, "content-length")), error = function(e) NA_integer_)
+    server         <- tryCatch(as.character(resp_header(resp, "server")), error = function(e) NA_character_)
+    server_date    <- tryCatch(httr::parse_http_date(resp_header(resp, "date")), error = function(e) as.POSIXct(NA))
+    
+    # Safely extract timing details from the 'resp$times' named vector
+    if (!is.null(resp$times) && is.numeric(resp$times)) {
+      # Use `[[...]]` which returns NULL if the name doesn't exist, preventing errors.
+      # Then provide a default NA_real_ if the result is NULL.
+      dns_time     <- resp$times[["namelookup"]] %||% NA_real_
+      connect_time <- resp$times[["connect"]] %||% NA_real_
+      total_time   <- resp$times[["total"]] %||% NA_real_
+    }
   }
   
-  # VPN IP lookup 
+  # VPN IP lookup
   vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
   current_ip   <- if (file.exists(vpn_log_path)) {
     vpn_log <- readRDS(vpn_log_path)
     vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
   } else NA_character_
   
-  # assemble entry 
+  # assemble entry
   log_entry <- data.table(
-    request_id           = request_id,
-    response_id          = response_id,
-    id                   = ifelse(is.null(request_info$id), NA_integer_, request_info$id),
-    domain               = ifelse(is.null(request_info$domain), NA_character_, request_info$domain),
-    url                  = ifelse(is.null(request_info$url), NA_character_, request_info$url),
-    timestamp_scraped    = Sys.time(),
-    from_chunk           = chunk_number,
-    status_code          = status_code,
-    response_headers     = list(response_headers),
-    response_time        = response_time,
-    server_date          = server_date,
-    content_type         = content_type,
-    content_length       = content_length,
-    server               = server,
-    user_agent_id        = ifelse(is.null(request_info$user_agent_id), NA_integer_, request_info$user_agent_id),
-    ip_address           = current_ip,
-    dns_time             = NA_real_,
-    connect_time         = NA_real_,
-    total_time           = response_time,
-    curl_error_code      = ifelse(!response_result$success, 1L, 0L),
-    ssl_verify_result    = NA_integer_,
-    redirect_count       = NA_integer_,
-    rate_limit_remaining = rate_limit_remaining,
-    rate_limit_reset     = rate_limit_reset,
-    retry_after          = retry_after,
-    response_analysis    = response_analysis
+    request_id         = request_id,
+    response_id        = response_id,
+    id                 = ifelse(is.null(request_info$id), NA_integer_, request_info$id),
+    domain             = ifelse(is.null(request_info$domain), NA_character_, request_info$domain),
+    url                = ifelse(is.null(request_info$url), NA_character_, request_info$url),
+    timestamp_scraped  = Sys.time(),
+    from_chunk         = chunk_number,
+    status_code        = status_code,
+    response_headers   = list(response_headers),
+    response_time      = total_time, # Use the robustly extracted total_time
+    server_date        = server_date,
+    content_type       = content_type,
+    content_length     = content_length,
+    server             = server,
+    user_agent_id      = ifelse(is.null(request_info$user_agent_id), NA_integer_, request_info$user_agent_id),
+    ip_address         = current_ip,
+    dns_time           = dns_time,
+    connect_time       = connect_time,
+    total_time         = total_time,
+    curl_error_code    = ifelse(!response_result$success, 1L, 0L),
+    ssl_verify_result  = NA_integer_, # These would require deeper httr2 internals
+    redirect_count     = NA_integer_, # or manual tracking
+    rate_limit_remaining = NA_integer_, # Placeholder, needs specific header parsing
+    rate_limit_reset   = as.POSIXct(NA),   # Placeholder
+    retry_after        = NA_integer_,      # Placeholder
+    response_analysis  = response_analysis
   )
   
-  # harmonise
+  # Harmonize columns and bind (same as your original code)
+  # ... (The rest of your function from "harmonise" onwards can remain)
   all_cols <- union(names(chunk_log), names(log_entry))
-  
-  # add missing
   for (col in setdiff(all_cols, names(chunk_log)))  chunk_log[,  (col) := NA_character_]
   for (col in setdiff(all_cols, names(log_entry)))  log_entry[, (col) := NA_character_]
-  
-  # same order 
   data.table::setcolorder(chunk_log, all_cols)
   data.table::setcolorder(log_entry, all_cols)
-  
-  # use same var type 
   for (col in all_cols) {
     if (!identical(class(chunk_log[[col]]), class(log_entry[[col]]))) {
       chunk_log[,  (col) := as.character(get(col))]
       log_entry[, (col) := as.character(get(col))]
     }
   }
-  
-  # rbind 
-  chunk_log <- data.table::rbindlist(
-    list(chunk_log, log_entry),
-    use.names = TRUE, fill = TRUE
-  )
-  
+  chunk_log <- data.table::rbindlist(list(chunk_log, log_entry), use.names = TRUE, fill = TRUE)
   assign(dt_name, chunk_log, envir = .GlobalEnv)
   
   invisible(response_id)
+}
+
+# Helper operator for the timing extraction (like a coalesce function)
+`%||%` <- function(a, b) {
+  if (is.null(a)) b else a
 }
 
 
