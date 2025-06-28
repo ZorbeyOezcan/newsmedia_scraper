@@ -231,7 +231,13 @@ init_input_dataset <- function(paths) {
   
   # Helper function to clean domains from URLs, remove 'www.' and TLDs (.de, .com, etc.)
   .extract_domain <- function(url) {
-    url
+    # Remove protocol and www
+    domain <- sub("^https?://(?:www\\.)?", "", url)
+    # Remove path
+    domain <- sub("/.*$", "", domain)
+    # Remove TLD (everything after last dot)
+    domain <- sub("\\.[^.]+$", "", domain)
+    return(domain)
   }
   
   # Create the new input dataset with cleaned domain and initialized flags
@@ -1117,9 +1123,10 @@ init_header_params <- function(paths) {
   for (i in seq_along(unique_domains)) {
     domain_url <- unique_domains[i]
     
-    # Clean domain for storage key (do this first for consistency)
+    # Clean domain for storage key (gekürzte Version)
     clean_domain <- sub("^https?://(?:www\\.)?", "", domain_url)
     clean_domain <- sub("/.*$", "", clean_domain)
+    clean_domain <- sub("\\.[^.]+$", "", clean_domain) 
     
     # Progress indicator
     if (i %% 10 == 0) {
@@ -1214,7 +1221,14 @@ init_header_params <- function(paths) {
   for (domain in unique_domains) {
     clean_domain <- sub("^https?://(?:www\\.)?", "", domain)
     clean_domain <- sub("/.*$", "", clean_domain)
-    header_params$host[[clean_domain]] <- clean_domain
+    clean_domain <- sub("\\.[^.]+$", "", clean_domain)  
+    
+    # edgcase faz
+    if (clean_domain == "faz") {
+      header_params$host[[clean_domain]] <- "faz.net"
+    } else {
+      header_params$host[[clean_domain]] <- paste0(clean_domain, ".de")
+    }
   }
   
   # Set static headers

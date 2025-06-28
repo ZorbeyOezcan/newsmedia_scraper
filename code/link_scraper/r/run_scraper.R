@@ -29,7 +29,6 @@ source("03_identity_manager.R")
 source("04_request_orchestrator.R")
 source("05_request_executor.R")
 source("06_html_parser.R")
-# source("git_clone_test.R")
 source("07_response_analyzer.R")
 source("09_storage_manager.R")
 source("10_log_manager.R")
@@ -152,12 +151,6 @@ for (i in 1:nrow(chunk_dt)) {
   # Add small delay between requests
   Sys.sleep(runif(1, 0.5, 1.5))
   
-  # Progress update every 10 links
-  if (i %% 10 == 0) {
-    message(sprintf("\nProgress: %d/%d links processed", i, total_links))
-    message(sprintf("Success: %d, Retry: %d, Error: %d, Parse Error: %d", 
-                    successful_count, retry_count, error_count, parse_error_count))
-  }
 }
 
 # ==============================================================================
@@ -202,3 +195,4 @@ for (i in seq_along(status_table)) {
 `%+%` <- function(a, b) paste0(a, b)
 
 message("\nTest run completed successfully!")
+

@@ -52,12 +52,12 @@ func_04_initialize_session_pool <- function() {
   # Read input data
   input_dt <- readRDS(input_path)
   
-  # Get unique domains from the domain column
+  # Get unique domains from the domain column (bereits gekürzt)
   unique_domains <- unique(input_dt$domain)
   unique_domains <- unique_domains[!is.na(unique_domains) & unique_domains != ""]
   
   # Select 10 random user agent IDs (between 1 and 100)
-  set.seed(Sys.time()) # Use current time as seed for randomness
+  set.seed(Sys.time())
   selected_ua_ids <- sample(1:100, 10, replace = FALSE)
   
   # Sort the UA IDs for display
@@ -74,8 +74,8 @@ func_04_initialize_session_pool <- function() {
   
   # Create sessions for each domain
   for (domain in unique_domains) {
-    # Clean domain name for session naming
-    clean_domain <- .extract_clean_domain(domain)
+    # domain ist bereits gekürzt (z.B. "faz", "spiegel")
+    # Keine weitere Bereinigung nötig!
     
     # Initialize domain entry in session pool
     local_session_pool[[domain]] <- list()
@@ -85,8 +85,8 @@ func_04_initialize_session_pool <- function() {
     
     # Create 10 sessions for this domain using the selected user agents
     for (i in 1:10) {
-      # Generate session name
-      session_name <- sprintf("session_%s_%02d", clean_domain, i)
+      # Generate session name - verwende domain direkt
+      session_name <- sprintf("session_%s_%02d", domain, i)
       
       # Create session using the function from module 03
       session_obj <- func_03_create_session(domain, selected_ua_ids[i])

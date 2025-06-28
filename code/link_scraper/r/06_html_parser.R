@@ -556,49 +556,39 @@ setup_paywall_rules <- function() {
     "noz" = list(
       has_paywall = TRUE,
       paywall_markers = list(
-        css_selectors = c(
-          "div[data-paywall-id]", "div.paywall--classic--container", 
-          "div.paywall--classic__content", "meta[content*='zugang']",
-          "a[href*='zugang']", "meta[content*='plus']", "a[href*='plus']"
-        ),
+        css_selectors = c("span.paid-content"),
         meta_tags = c('meta[name="cXenseParse:qgw-access"][content~="Paid"]')
       )
     ),
-    "abendzeitung-muenchen" = list(
+    "bild" = list(
       has_paywall = TRUE,
       paywall_markers = list(
         css_selectors = c(
-          "div[data-fcms-title*='az\\+?']", "a[data-fcms-title*='az\\+?']"
+          "div.offer-module",
+          "div.offer-module__ps"
         )
       )
     ),
-    "berliner-zeitung" = list(
-      has_paywall = TRUE,
-      paywall_markers = list(
-        css_selectors = c("meta[content*='registrieren']")
-      )
+    "shz" = list(
+      has_paywall = FALSE,
+      paywall_markers = list()
     ),
     "epochtimes" = list(
-      has_paywall = TRUE,
-      paywall_markers = list(
-        css_selectors = c("img[alt*='anmeldung']")
-      )
+      has_paywall = as.logical(NA),
+      paywall_markers = list()
     ),
-    "shz" = list(
-      has_paywall = TRUE,
-      paywall_markers = list(
-        css_selectors = c(
-          "div[data-paywall-id]", "div.paywall--classic--container",
-          "a[href*='paywall']", "meta[content*='az\\+?']"
-        ),
-        meta_tags = c('meta[name="cXenseParse:lqa-access"][content~="Paid"]')
-      )
+    "wiwo" = list(
+      has_paywall = as.logical(NA),
+      paywall_markers = list()
+    ),
+    "freiepresse" = list(
+      has_paywall = as.logical(NA),
+      paywall_markers = list()
     ),
     "volksstimme" = list(
       has_paywall = TRUE,
-      paywall_markers = list(
-        css_selectors = c("div.fp-article-body")
-      )
+      paywall_markers = list(),
+      special_detection = "text_length"
     )
   )
   
@@ -640,12 +630,23 @@ setup_paywall_rules <- function() {
               classes <- unlist(strsplit(attr_value, " "))
               matching_class <- classes[grepl(keyword, classes, ignore.case = TRUE)][1]
               if (!is.na(matching_class)) {
-                element_selector <- paste0(element_tag, ".", matching_class)
+                # Clean class name from special characters that could break CSS selectors
+                clean_class <- gsub("[^a-zA-Z0-9_-]", "", matching_class)
+                if (nchar(clean_class) > 0) {
+                  element_selector <- paste0(element_tag, ".", clean_class)
+                }
               }
             } else if (attr_name == "id") {
-              element_selector <- paste0(element_tag, "#", attr_value)
+              # Clean ID from special characters
+              clean_id <- gsub("[^a-zA-Z0-9_-]", "", attr_value)
+              if (nchar(clean_id) > 0) {
+                element_selector <- paste0(element_tag, "#", clean_id)
+              }
             } else {
-              element_selector <- sprintf('%s[%s*="%s"]', element_tag, attr_name, keyword)
+              # Skip attribute selectors with special characters that might cause issues
+              if (!grepl("[:;\"']", attr_name) && !grepl("[:;\"']", keyword)) {
+                element_selector <- sprintf('%s[%s*="%s"]', element_tag, attr_name, keyword)
+              }
             }
             matched <- TRUE
             break
@@ -729,6 +730,9 @@ setup_paywall_rules <- function() {
   # Identify no_paywall domains
   no_paywall_domains <- paywall_data[grepl("no_paywall", paywall_url, ignore.case = TRUE), unique(domain)]
   
+  # Identify all_paywall domains
+  all_paywall_domains <- paywall_data[paywall_url == "all_paywall", unique(domain)]
+  
   # Process each domain
   for (domain_name in unique_domains) {
     message(sprintf("\nAnalyzing domain: %s", domain_name))
@@ -757,6 +761,31 @@ setup_paywall_rules <- function() {
       next
     }
     
+    # Check for all_paywall flag
+    if (domain_name %in% all_paywall_domains) {
+      message("  Domain is marked as 'all_paywall'")
+      
+      paywall_rules[[domain_name]] <- list(
+        has_paywall = TRUE,
+        is_all_paywall = TRUE,
+        paywall_markers = list()
+      )
+      
+      # Count successful fetches
+      domain_html <- html_storage[domain == domain_name]
+      
+      overview_dt <- rbind(overview_dt, data.table(
+        domain = domain_name,
+        has_paywall = TRUE,
+        n_paywall_markers = 0L,
+        paywall_markers = list(list(note = "all_paywall_flag")),
+        successful_free_fetches = nrow(domain_html[label == "free"]),
+        successful_paywall_fetches = nrow(domain_html[label == "paywalled"])
+      ))
+      
+      next
+    }
+    
     # Check for hardcoded rules first
     if (domain_name %in% names(hardcoded_rules)) {
       message("  Using predefined rules")
@@ -771,7 +800,7 @@ setup_paywall_rules <- function() {
       
       overview_dt <- rbind(overview_dt, data.table(
         domain = domain_name,
-        has_paywall = TRUE,
+        has_paywall = hardcoded_rules[[domain_name]]$has_paywall,
         n_paywall_markers = n_markers,
         paywall_markers = list(hardcoded_rules[[domain_name]]$paywall_markers),
         successful_free_fetches = nrow(domain_html[label == "free"]),
@@ -879,12 +908,14 @@ setup_paywall_rules <- function() {
   # Print summary statistics
   message("\nSummary Statistics")
   message(sprintf("Total domains analyzed: %d", nrow(overview_dt)))
-  message(sprintf("Domains with paywalls: %d", sum(overview_dt$has_paywall)))
-  message(sprintf("Domains without paywalls: %d", sum(!overview_dt$has_paywall)))
+  message(sprintf("Domains with paywalls: %d", sum(overview_dt$has_paywall, na.rm = TRUE)))
+  message(sprintf("Domains without paywalls: %d", sum(!overview_dt$has_paywall, na.rm = TRUE)))
+  message(sprintf("Domains with NA paywall status: %d", sum(is.na(overview_dt$has_paywall))))
   message(sprintf("Total paywall markers found: %d", sum(overview_dt$n_paywall_markers)))
   
   return(invisible(TRUE))
 }
+
 
 # Execute the paywall rules setup function - only run once
 # setup_paywall_rules()
@@ -1006,14 +1037,16 @@ setup_bot_detection_rules <- function() {
 }
 
 # Execute the bot detection rules setup function - only run once
-# This should be called during the initial setup of your project.
-setup_bot_detection_rules()
+# setup_bot_detection_rules()
 
 # Clean up the function from the environment after running, if desired
 rm(setup_bot_detection_rules)
 
 # load rds. if needed
 # bot_detection_rules <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/config/06_parsing_config/06_bot_detection_rules.rds")
+
+
+#####
 
 
 
@@ -1060,8 +1093,21 @@ func_06_parse_html <- local({
     # This loop is fast as it short-circuits on the first match.
     for (type in names(paywall_markers)) {
       for (pattern in paywall_markers[[type]]) {
-        if (type == "css_selectors" && length(html_nodes(html_parsed, pattern)) > 0) return(TRUE)
-        if (type == "meta_tags" && length(html_nodes(html_parsed, pattern)) > 0) return(TRUE)
+        # Try to use the selector, but catch any parsing errors
+        tryCatch({
+          if (type == "css_selectors") {
+            # Escape colons in CSS selectors for rvest compatibility
+            escaped_pattern <- gsub(":", "\\\\:", pattern)
+            if (length(html_nodes(html_parsed, escaped_pattern)) > 0) return(TRUE)
+          } else if (type == "meta_tags") {
+            # Meta tags typically don't have colons that need escaping
+            if (length(html_nodes(html_parsed, pattern)) > 0) return(TRUE)
+          }
+        }, error = function(e) {
+          # Log the problematic selector but continue checking others
+          message(sprintf("Warning: Could not parse selector '%s': %s", pattern, e$message))
+          return(FALSE)
+        })
       }
     }
     return(FALSE)
@@ -1099,6 +1145,19 @@ func_06_parse_html <- local({
   .sanitize_value <- function(value) {
     if (is.null(value) || length(value) == 0) return(NA_character_)
     return(as.character(value))
+  }
+  
+  # --- NEW: Helper function for Volksstimme text length detection ---
+  .check_volksstimme_paywall <- function(text_content) {
+    # Remove NA and calculate text length
+    if (is.na(text_content) || is.null(text_content)) return(FALSE)
+    
+    # Clean the text and calculate character count
+    clean_text <- trimws(as.character(text_content))
+    text_length <- nchar(clean_text)
+    
+    # Check if text length is between 300 and 500 characters
+    return(text_length >= 300 && text_length <= 500)
   }
   
   
@@ -1147,16 +1206,8 @@ func_06_parse_html <- local({
       return(list(success = FALSE, data = temp_dt, reason = "bot_detected"))
     }
     
-    # 2. Paywall Detection
+    # 2. Content Parsing (moved before paywall detection for Volksstimme)
     domain_clean <- sub("\\..*$", "", temp_dt$domain)
-    paywall_entry <- .paywall_rules_cache[[domain_clean]]
-    if (!is.null(paywall_entry) && isTRUE(paywall_entry$has_paywall)) {
-      temp_dt$paywall <- .check_paywall_markers(html_parsed, paywall_entry$paywall_markers)
-    } else {
-      temp_dt$paywall <- FALSE # Default to FALSE if no rules or has_paywall is false
-    }
-    
-    # 3. Content Parsing
     parser_entry <- .parser_rules_cache[[domain_clean]]
     if (!is.null(parser_entry) && isTRUE(parser_entry$success)) {
       parsing_func <- parser_entry$parse_function
@@ -1170,17 +1221,42 @@ func_06_parse_html <- local({
       }
     }
     
+    # 3. Paywall Detection
+    paywall_entry <- .paywall_rules_cache[[domain_clean]]
+    if (!is.null(paywall_entry)) {
+      # Check for special detection methods
+      if (!is.null(paywall_entry$special_detection) && paywall_entry$special_detection == "text_length") {
+        # Special handling for Volksstimme
+        temp_dt$paywall <- .check_volksstimme_paywall(temp_dt$text)
+      } else if (!is.na(paywall_entry$has_paywall)) {
+        # Normal paywall detection
+        if (isTRUE(paywall_entry$has_paywall)) {
+          temp_dt$paywall <- .check_paywall_markers(html_parsed, paywall_entry$paywall_markers)
+        } else {
+          temp_dt$paywall <- FALSE
+        }
+      } else {
+        # NA paywall status
+        temp_dt$paywall <- as.logical(NA)
+      }
+    } else {
+      temp_dt$paywall <- FALSE # Default to FALSE if no rules
+    }
+    
     # --- Final Routing Logic ---
     is_na_headline <- is.na(temp_dt$headline) || nchar(trimws(temp_dt$headline)) == 0
     is_na_text     <- is.na(temp_dt$text)     || nchar(trimws(temp_dt$text)) == 0
+    
+    # Treat NA paywall as TRUE for routing decisions
+    paywall_for_routing <- ifelse(is.na(temp_dt$paywall), TRUE, temp_dt$paywall)
     
     # Case 1: Successful parse with essential content
     if (!is_na_headline && !is_na_text) {
       func_10_append_output(temp_dt, input_info, list(), chunk_name)
       return(list(success = TRUE, data = temp_dt))
       
-      # Case 2: Paywalled content could not be parsed
-    } else if (isTRUE(temp_dt$paywall)) {
+      # Case 2: Paywalled content could not be parsed (including NA paywall)
+    } else if (isTRUE(paywall_for_routing)) {
       func_10_append_error("paywalled_content", input_info, chunk_name)
       return(list(success = FALSE, data = temp_dt, reason = "paywalled_content"))
       

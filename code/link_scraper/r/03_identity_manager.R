@@ -298,8 +298,12 @@ func_03_create_session <- function(domain, user_agent_id) {
   
   # Get same-site referer for later use
   if (!domain %in% names(header_params$same_site_referer)) {
-    # Fallback construction if not found
-    same_site_referer <- paste0("https://", domain, "/")
+    # Fallback construction
+    if (domain == "faz") {
+      same_site_referer <- "https://faz.net/"
+    } else {
+      same_site_referer <- paste0("https://", domain, ".de/")
+    }
   } else {
     same_site_referer <- header_params$same_site_referer[[domain]]
   }
