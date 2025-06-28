@@ -90,7 +90,9 @@ for (i in 1:nrow(chunk_dt)) {
   message(sprintf("Domain: %s", link_info$domain))
   
   # Step 1: Prepare request package using module 04
+  
   request_package <- func_04_prepare_request(
+    id = link_info$id,
     url = link_info$url,
     domain = link_info$domain,
     chunk_dt = chunk_dt,
@@ -111,8 +113,9 @@ for (i in 1:nrow(chunk_dt)) {
     next
   }
   
-  # Add link ID to request package for tracking
-  request_package$request_params$id <- link_info$id
+  # --- REMOVED: The following line is no longer necessary ---
+  # # Add link ID to request package for tracking
+  # request_package$request_params$id <- link_info$id
   
   # Step 2: Execute HTTP request using module 05
   message("Executing HTTP request...")
@@ -145,13 +148,15 @@ for (i in 1:nrow(chunk_dt)) {
   } else {  # "error"
     
     error_count <- error_count + 1
-
+    
   }
   
   # Add small delay between requests
   Sys.sleep(runif(1, 0.5, 1.5))
   
 }
+
+func_09_fill_output(current_chunk)
 
 # ==============================================================================
 # SUMMARY REPORT
@@ -195,4 +200,3 @@ for (i in seq_along(status_table)) {
 `%+%` <- function(a, b) paste0(a, b)
 
 message("\nTest run completed successfully!")
-

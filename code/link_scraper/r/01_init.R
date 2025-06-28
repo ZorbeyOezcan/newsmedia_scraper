@@ -295,7 +295,7 @@ init_final_output_dataset <- function(paths) {
     domain = character(),
     url = character(),        
     timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping)
-    date_time = character(),
+    date_time = as.POSIXct(character()), # proper date-time object
     author = character(),
     headline = character(),
     text = character(),
@@ -332,7 +332,7 @@ rm(init_final_output_dataset)
 init_vpn_log <- function() {
   # Define the filename for the vpn log RDS file
   vpn_log_file <- file.path(paths$logs, "vpn_log.rds")
-
+  
   # Check if already existing 
   if (file.exists(vpn_log_file)) {
     message("'vpn_log.rds' already exists at ", vpn_log_file, ". Skipping creation.")
@@ -349,10 +349,10 @@ init_vpn_log <- function() {
     total_requests = integer(),   # counter of total requests made
     blocked_by_domain = list()    # list of domains that blocked this vpn. 
   )
-    
-    # Save the new empty vpn log data.table as RDS file
-    saveRDS(vpn_log, vpn_log_file)
-    message("VPN log successfully created and saved to", vpn_log_file)
+  
+  # Save the new empty vpn log data.table as RDS file
+  saveRDS(vpn_log, vpn_log_file)
+  message("VPN log successfully created and saved to", vpn_log_file)
   # Return the vpn log data.table for further use
   return(vpn_log)
 }
@@ -794,7 +794,7 @@ test_user_agents()
 
 # Clean up environment - remove all created variables and functions
 rm("generate_user_agent", "create_user_agents_table",
-            "save_user_agents", "test_user_agents")
+   "save_user_agents", "test_user_agents")
 
 
 
@@ -818,7 +818,7 @@ init_parse_error_dataset <- function(paths) {
     domain = character(),          # character (cleaned domain from input)
     url = character(),             # character (URL from input)
     timestamp_scraped = as.POSIXct(character()),  # POSIXct (date-time of scraping attempt)
-    date_time = character(),       # character (extracted date/time from content)
+    date_time = as.POSIXct(character()), # proper date-time object
     author = character(),          # character (extracted author information)
     headline = character(),        # character (extracted headline/title)
     text = character(),            # character (extracted text content)
@@ -985,7 +985,7 @@ test_data_structure("request_log_ds")
 rm(init_request_log_dataset)
 
 # Load if wanted 
-# request_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/request_log.rds")
+# request_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/request_log.ds")
 
 
 
@@ -1065,7 +1065,7 @@ test_data_structure("response_log_ds")
 rm(init_response_log_dataset)
 
 # Load if wanted 
-# response_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/response_log.rds")
+# response_log_ds <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/response_log.ds")
 
 
 
@@ -1310,4 +1310,3 @@ test_data_structure("error_ds")
 
 # Clean up environment
 rm("init_error_dataset", "paths")
-

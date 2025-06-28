@@ -99,7 +99,8 @@ setup_parser_rules <- function() {
     error_message = character()
   )
   
-  # Function to extract complete parsing logic
+  # The dynamically generated function will now return a proper POSIXct object
+  # for datetime, instead of converting it to a character.
   extract_complete_parsing_logic <- function(script_content, domain_name) {
     tryCatch({
       # Find the function definition line
@@ -145,7 +146,7 @@ setup_parser_rules <- function() {
       
       # Build the wrapper function
       custom_s_n_list_def <- "
-    s_n_list <- function(datetime_val = NA_character_, author_val = NA_character_, headline_val = NA_character_, text_val = NA_character_) {
+    s_n_list <- function(datetime_val = NA, author_val = NA_character_, headline_val = NA_character_, text_val = NA_character_) {
       datetime <<- datetime_val
       author <<- author_val
       headline <<- headline_val
@@ -162,8 +163,8 @@ setup_parser_rules <- function() {
         library(jsonlite)
         library(stringr)
 
-        # Initialize variables
-        datetime <- NA_character_
+        # Initialize variables, note datetime is now NA, not NA_character_
+        datetime <- as.POSIXct(NA)
         author <- NA_character_
         headline <- NA_character_
         text <- NA_character_
@@ -174,17 +175,15 @@ setup_parser_rules <- function() {
         # Execute parsing logic within a tryCatch block
         tryCatch({
           %s
-          # Return extracted data as a list
           list(
-            datetime = as.character(datetime),
+            datetime = datetime,
             author = as.character(author),
             headline = as.character(headline),
             text = as.character(text)
           )
         }, error = function(e) {
-          # Return NAs and error message on failure
           list(
-            datetime = NA_character_,
+            datetime = as.POSIXct(NA),
             author = NA_character_,
             headline = NA_character_,
             text = NA_character_,
@@ -1056,55 +1055,44 @@ func_06_parse_html <- local({
   # --- Private Caching Environment ---
   .parser_rules_cache <- NULL
   .paywall_rules_cache <- NULL
-  .bot_rules_cache <- NULL # NEW: Cache for bot detection rules
+  .bot_rules_cache <- NULL 
   
   # --- Internal helper function to load rules if needed ---
   .load_cached_rules <- function() {
-    paths <- get_module_paths() # Assumes this helper function exists
+    paths <- get_module_paths() 
     
-    # Load parser rules
     if (is.null(.parser_rules_cache)) {
       parser_rules_path <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
       if (!file.exists(parser_rules_path)) stop("FATAL: Parser rule file not found: ", parser_rules_path)
-      message("Loading and caching content parser rules...")
       .parser_rules_cache <<- readRDS(parser_rules_path)
     }
     
-    # Load paywall rules
     if (is.null(.paywall_rules_cache)) {
       paywall_rules_path <- file.path(paths$parsing_config, "06_paywall_rules_generated.rds")
       if (!file.exists(paywall_rules_path)) stop("FATAL: Paywall rule file not found: ", paywall_rules_path)
-      message("Loading and caching paywall rules...")
       .paywall_rules_cache <<- readRDS(paywall_rules_path)
     }
     
-    # NEW: Load bot detection rules
     if (is.null(.bot_rules_cache)) {
       bot_rules_path <- file.path(paths$parsing_config, "06_bot_detection_rules.rds")
       if (!file.exists(bot_rules_path)) stop("FATAL: Bot detection rule file not found: ", bot_rules_path)
-      message("Loading and caching bot detection rules...")
       .bot_rules_cache <<- readRDS(bot_rules_path)
     }
   }
   
-  # --- Internal helper function to check for paywall markers ---
+  # --- Internal helper functions ---
   .check_paywall_markers <- function(html_parsed, paywall_markers) {
     if (length(paywall_markers) == 0) return(FALSE)
-    # This loop is fast as it short-circuits on the first match.
     for (type in names(paywall_markers)) {
       for (pattern in paywall_markers[[type]]) {
-        # Try to use the selector, but catch any parsing errors
         tryCatch({
           if (type == "css_selectors") {
-            # Escape colons in CSS selectors for rvest compatibility
             escaped_pattern <- gsub(":", "\\\\:", pattern)
             if (length(html_nodes(html_parsed, escaped_pattern)) > 0) return(TRUE)
           } else if (type == "meta_tags") {
-            # Meta tags typically don't have colons that need escaping
             if (length(html_nodes(html_parsed, pattern)) > 0) return(TRUE)
           }
         }, error = function(e) {
-          # Log the problematic selector but continue checking others
           message(sprintf("Warning: Could not parse selector '%s': %s", pattern, e$message))
           return(FALSE)
         })
@@ -1113,22 +1101,16 @@ func_06_parse_html <- local({
     return(FALSE)
   }
   
-  # --- NEW: Highly optimized helper function to check for bot markers ---
   .check_bot_detection <- function(html_parsed, bot_rules) {
-    # Check for CSS selectors first (fastest)
     for (selector in bot_rules$css_selectors) {
       if (length(rvest::html_nodes(html_parsed, selector)) > 0) return(TRUE)
     }
-    
-    # Check for text keywords in title and body (pre-extract text once for efficiency)
     title_text <- rvest::html_text(rvest::html_node(html_parsed, "title"))
     body_text <- rvest::html_text(rvest::html_node(html_parsed, "body"))
     combined_text <- paste(title_text, body_text)
     for (keyword in bot_rules$text_keywords) {
       if (stringr::str_detect(combined_text, stringr::fixed(keyword, ignore_case = TRUE))) return(TRUE)
     }
-    
-    # Check for JS patterns in script content (most expensive, so last)
     all_scripts <- rvest::html_nodes(html_parsed, "script")
     all_script_content <- paste(rvest::html_attr(all_scripts, "src"), 
                                 rvest::html_text(all_scripts), 
@@ -1136,77 +1118,65 @@ func_06_parse_html <- local({
     for (pattern in bot_rules$js_patterns) {
       if (stringr::str_detect(all_script_content, stringr::fixed(pattern))) return(TRUE)
     }
-    
-    # If no markers were found
     return(FALSE)
   }
   
-  # --- Helper function to sanitize values for data.table assignment ---
   .sanitize_value <- function(value) {
-    if (is.null(value) || length(value) == 0) return(NA_character_)
+    if (is.null(value) || length(value) == 0 || all(is.na(value))) return(NA_character_)
     return(as.character(value))
   }
   
-  # --- NEW: Helper function for Volksstimme text length detection ---
   .check_volksstimme_paywall <- function(text_content) {
-    # Remove NA and calculate text length
     if (is.na(text_content) || is.null(text_content)) return(FALSE)
-    
-    # Clean the text and calculate character count
     clean_text <- trimws(as.character(text_content))
     text_length <- nchar(clean_text)
-    
-    # Check if text length is between 300 and 500 characters
     return(text_length >= 300 && text_length <= 500)
   }
   
-  
-  # --- The main function that is returned and exposed externally ---
+  # --- The main function ---
   function(response_result, chunk_name) {
     
     .load_cached_rules()
     
     request_info <- response_result$request_info
-    input_info <- list(id = request_info$id, domain = request_info$domain, url = request_info$url)
     
     html_content <- tryCatch(httr2::resp_body_string(response_result$httr2_response), error = function(e) NULL)
     
+    # If an error happens before temp_dt is created, we build a minimal data.table
+    # so that the append function always receives a consistent object type.
     if (is.null(html_content) || nchar(html_content) == 0) {
-      func_10_append_error("empty_html_content", input_info, chunk_name)
+      minimal_dt <- data.table(id = request_info$id, domain = request_info$domain, url = request_info$url)
+      func_10_append_error("empty_html_content", minimal_dt, chunk_name)
       return(list(success = FALSE, data = NULL, reason = "empty_html_content"))
     }
     
-    # Initialize the data.table with all potential columns, ensuring no empty values
     temp_dt <- data.table(
       id                = as.integer(request_info$id),
       domain            = as.character(request_info$domain),
       url               = as.character(request_info$url),
       timestamp_scraped = as.POSIXct(request_info$request_timestamp),
-      date_time         = NA_character_,
+      date_time         = as.POSIXct(NA),
       author            = NA_character_,
       headline          = NA_character_,
       text              = NA_character_,
-      paywall           = NA,
-      bot_detect        = as.logical(NA) # FIX: Changed NA_logical_ to as.logical(NA) for better compatibility.
+      paywall           = as.logical(NA),
+      bot_detect        = as.logical(NA)
     )
     
     html_parsed <- tryCatch(rvest::read_html(html_content), error = function(e) NULL)
     
     if (is.null(html_parsed)) {
-      func_10_append_error("html_parse_failed", input_info, chunk_name)
+      minimal_dt <- data.table(id = request_info$id, domain = request_info$domain, url = request_info$url)
+      func_10_append_error("html_parse_failed", minimal_dt, chunk_name)
       return(list(success = FALSE, data = NULL, reason = "html_parse_failed"))
     }
     
-    # --- Execute Checks ---
-    # 1. Bot Detection (highest priority)
     temp_dt$bot_detect <- .check_bot_detection(html_parsed, .bot_rules_cache)
     if (isTRUE(temp_dt$bot_detect)) {
-      # Assumes a function func_10_append_retry exists
-      func_10_append_retry("bot_detected", input_info, chunk_name) 
+      func_10_append_retry("bot_detected", request_info, chunk_name) 
       return(list(success = FALSE, data = temp_dt, reason = "bot_detected"))
     }
     
-    # 2. Content Parsing (moved before paywall detection for Volksstimme)
     domain_clean <- sub("\\..*$", "", temp_dt$domain)
     parser_entry <- .parser_rules_cache[[domain_clean]]
     if (!is.null(parser_entry) && isTRUE(parser_entry$success)) {
@@ -1214,61 +1184,51 @@ func_06_parse_html <- local({
       extracted_data <- tryCatch(parsing_func(html_parsed), error = function(e) list(error = e$message))
       
       if (is.null(extracted_data$error)) {
-        temp_dt$date_time <- .sanitize_value(extracted_data$datetime)
+        if (!is.null(extracted_data$datetime) && length(extracted_data$datetime) > 0 && !all(is.na(extracted_data$datetime))) {
+          temp_dt$date_time <- extracted_data$datetime
+        }
         temp_dt$author    <- .sanitize_value(extracted_data$author)
         temp_dt$headline  <- .sanitize_value(extracted_data$headline)
         temp_dt$text      <- .sanitize_value(extracted_data$text)
       }
     }
     
-    # 3. Paywall Detection
     paywall_entry <- .paywall_rules_cache[[domain_clean]]
     if (!is.null(paywall_entry)) {
-      # Check for special detection methods
       if (!is.null(paywall_entry$special_detection) && paywall_entry$special_detection == "text_length") {
-        # Special handling for Volksstimme
         temp_dt$paywall <- .check_volksstimme_paywall(temp_dt$text)
       } else if (!is.na(paywall_entry$has_paywall)) {
-        # Normal paywall detection
         if (isTRUE(paywall_entry$has_paywall)) {
           temp_dt$paywall <- .check_paywall_markers(html_parsed, paywall_entry$paywall_markers)
         } else {
           temp_dt$paywall <- FALSE
         }
-      } else {
-        # NA paywall status
-        temp_dt$paywall <- as.logical(NA)
       }
-    } else {
-      temp_dt$paywall <- FALSE # Default to FALSE if no rules
     }
     
-    # --- Final Routing Logic ---
-    is_na_headline <- is.na(temp_dt$headline) || nchar(trimws(temp_dt$headline)) == 0
-    is_na_text     <- is.na(temp_dt$text)     || nchar(trimws(temp_dt$text)) == 0
+    # This ensures no empty strings ("") are passed, only proper NAs.
+    temp_dt[is.na(date_time), date_time := as.POSIXct(NA)]
+    temp_dt[is.na(author) | nchar(trimws(author)) == 0, author := NA_character_]
+    temp_dt[is.na(headline) | nchar(trimws(headline)) == 0, headline := NA_character_]
+    temp_dt[is.na(text) | nchar(trimws(text)) == 0, text := NA_character_]
+    temp_dt[is.na(paywall), paywall := as.logical(NA)]
+    temp_dt[is.na(bot_detect), bot_detect := as.logical(NA)]
     
-    # Treat NA paywall as TRUE for routing decisions
+    is_na_date_time <- all(is.na(temp_dt$date_time))
+    is_na_text <- all(is.na(temp_dt$text))
+    
+    # Treat NA paywall as TRUE for routing decisions to be safe
     paywall_for_routing <- ifelse(is.na(temp_dt$paywall), TRUE, temp_dt$paywall)
     
-    # Case 1: Successful parse with essential content
-    if (!is_na_headline && !is_na_text) {
-      func_10_append_output(temp_dt, input_info, list(), chunk_name)
+    if (!is_na_date_time && !is_na_text) {
+      func_10_append_output(temp_dt, chunk_name)
       return(list(success = TRUE, data = temp_dt))
-      
-      # Case 2: Paywalled content could not be parsed (including NA paywall)
-    } else if (isTRUE(paywall_for_routing)) {
-      func_10_append_error("paywalled_content", input_info, chunk_name)
-      return(list(success = FALSE, data = temp_dt, reason = "paywalled_content"))
-      
-      # Case 3: Page is likely not a news article (all fields are empty)
-    } else if (is_na_headline && is_na_text && is.na(temp_dt$date_time) && is.na(temp_dt$author)) {
-      func_10_append_error("not_an_article", input_info, chunk_name)
-      return(list(success = FALSE, data = temp_dt, reason = "not_an_article"))
-      
-      # Case 4: Default parsing failure (content is missing but not due to paywall)
+    } else if (isTRUE(paywall_for_routing)) { 
+      func_10_append_error("paywalled_content_or_missing_fields", temp_dt, chunk_name)
+      return(list(success = FALSE, data = temp_dt, reason = "paywalled_content_or_missing_fields"))
     } else {
-      func_10_append_parse_error(temp_dt, input_info, html_content, chunk_name)
-      return(list(success = FALSE, data = temp_dt, reason = "missing_fields"))
+      func_10_append_parse_error(temp_dt, html_content, chunk_name)
+      return(list(success = FALSE, data = temp_dt, reason = "parsing_failed_no_paywall"))
     }
   }
 })

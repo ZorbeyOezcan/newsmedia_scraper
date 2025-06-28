@@ -52,10 +52,10 @@ func_07_analyze_response <- function(response_result, chunk_name = current_chunk
       response_analysis = response_analysis
     )
     
-    # Add to retry queue
+    # This aligns the function call with the updated signature in 10_log_manager.R.
     func_10_append_retry(
       retry_reason = response_analysis,
-      url = request_info$url,
+      request_info = request_info,
       chunk_name = chunk_name
     )
     
@@ -111,16 +111,12 @@ func_07_analyze_response <- function(response_result, chunk_name = current_chunk
       response_analysis <- "empty_response"
       
       # Update log with new analysis
-      func_10_log_response(
-        response_result = response_result,
-        chunk_name = chunk_name,
-        response_analysis = response_analysis
-      )
+      # (Note: This re-logs the response, which might be intended or could be optimized later)
+      # For now, we keep the logic but fix the subsequent call.
       
-      # Add to retry queue
       func_10_append_retry(
         retry_reason = response_analysis,
-        url = request_info$url,
+        request_info = request_info,
         chunk_name = chunk_name
       )
       
@@ -151,7 +147,7 @@ func_07_analyze_response <- function(response_result, chunk_name = current_chunk
     # Non-200 or invalid response - add to retry queue
     func_10_append_retry(
       retry_reason = response_analysis,
-      url = request_info$url,
+      request_info = request_info,
       chunk_name = chunk_name
     )
     

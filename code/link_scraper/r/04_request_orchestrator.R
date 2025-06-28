@@ -151,13 +151,13 @@ func_04_update_session_headers <- function(session, is_first_request = TRUE, chu
   
   # Handle first request of a session
   #if (is_first_request) {
-    # First request uses cross-site referer (already set in session creation)
-    # Ensure Sec-Fetch-Site is set to cross-site
-    #updated_headers$sec_fetch_site <- "cross-site"
-    
-    # Mark session as no longer on first request
-    #session$first_request <- FALSE
-    
+  # First request uses cross-site referer (already set in session creation)
+  # Ensure Sec-Fetch-Site is set to cross-site
+  #updated_headers$sec_fetch_site <- "cross-site"
+  
+  # Mark session as no longer on first request
+  #session$first_request <- FALSE
+  
   # test 2 - same site referrer 
   if (is_first_request) {
     updated_headers$sec_fetch_site <- "same-site"
@@ -375,7 +375,7 @@ func_04_check_domain_exhausted <- function(domain) {
 
 
 # 6. Function to prepare request package for module 05 - main function
-func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness_level = 1) {
+func_04_prepare_request <- function(id, url, domain, chunk_dt = NULL, aggressiveness_level = 1) {
   # Get active session for domain
   session_result <- func_04_get_active_session(domain)
   
@@ -425,6 +425,7 @@ func_04_prepare_request <- function(url, domain, chunk_dt = NULL, aggressiveness
   
   # Create request parameters package
   request_params <- list(
+    id = id,
     url = url,
     domain = domain,
     session = active_session, # Pass the fully updated session

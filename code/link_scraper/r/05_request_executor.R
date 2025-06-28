@@ -30,10 +30,23 @@ library(lubridate)
 func_05_execute_request <- function(request_package, chunk_name = "chunk_01", worker_id = 1) {
   # Validate input request package
   if (!is.list(request_package) || !request_package$success) {
+    # Even in this initial validation failure, we return the standardized list.
+    # We construct a minimal request_info for logging purposes.
     return(list(
       success = FALSE,
-      error = "Invalid or failed request package",
-      httr2_response = NULL
+      error_message = "Invalid or failed request package provided",
+      httr2_response = NULL,
+      session_updated = request_package$request_params$session %||% list(), # Safely get session
+      request_info = list(
+        request_id = NA_integer_,
+        id = request_package$request_params$id %||% NA_integer_,
+        url = request_package$request_params$url %||% NA_character_,
+        domain = request_package$request_params$domain %||% NA_character_,
+        session_id = request_package$request_params$session$id %||% NA_character_,
+        user_agent_id = request_package$request_params$session$user_agent_id %||% NA_integer_,
+        aggressiveness_level = request_package$request_params$aggressiveness %||% NA_integer_,
+        request_timestamp = Sys.time()
+      )
     ))
   }
   
@@ -48,8 +61,19 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
   if (is.null(url) || is.null(session) || is.null(session$headers)) {
     return(list(
       success = FALSE,
-      error = "Missing essential request parameters",
-      httr2_response = NULL
+      error_message = "Missing essential request parameters (url, session, or headers)",
+      httr2_response = NULL,
+      session_updated = session,
+      request_info = list(
+        request_id = NA_integer_,
+        id = request_package$request_params$id %||% NA_integer_,
+        url = url %||% NA_character_,
+        domain = domain %||% NA_character_,
+        session_id = session$id %||% NA_character_,
+        user_agent_id = session$user_agent_id %||% NA_integer_,
+        aggressiveness_level = aggressiveness,
+        request_timestamp = request_timestamp
+      )
     ))
   }
   
@@ -142,13 +166,12 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
     message(sprintf("Request executed: %s (Status: %d)", 
                     url, resp_status(httr2_response)))
     
-    # Return complete httr2 response object for module 07
     return(list(
       success = TRUE,
       httr2_response = httr2_response,
       session_updated = session,
       request_info = list(
-        request_id = request_id,  # Include the logged request ID
+        request_id = request_id,
         id = request_package$request_params$id,
         url = url,
         domain = domain,
@@ -156,7 +179,8 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
         user_agent_id = session$user_agent_id,
         aggressiveness_level = aggressiveness,
         request_timestamp = request_timestamp
-      )
+      ),
+      error_message = NA_character_ # Add NA error message on success
     ))
     
   }, error = function(e) {
@@ -179,11 +203,11 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
     
     return(list(
       success = FALSE,
-      error = as.character(e$message),
+      error_message = as.character(e$message), # Rename 'error' to 'error_message'
       httr2_response = NULL,
       session_updated = session,
       request_info = list(
-        request_id = request_id,  # Include request ID even for failed requests
+        request_id = request_id,
         id = request_package$request_params$id,
         url = url,
         domain = domain,
@@ -194,4 +218,9 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
       )
     ))
   })
+}
+
+# Helper operator for safe NULL fallbacks
+`%||%` <- function(a, b) {
+  if (is.null(a)) b else a
 }
