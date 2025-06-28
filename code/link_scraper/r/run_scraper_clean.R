@@ -52,7 +52,9 @@ message("All modules loaded successfully.")
 message("\nCreating a new chunk of links to process...")
 # This creates a new chunk with default settings (10% of remaining links)
 # The name of the chunk (e.g., "chunk_001") is returned and stored.
-current_chunk <- func_02_build_chunk(absolute_links = 1000) 
+
+func_09_update_input()
+current_chunk <- func_02_build_chunk(absolute_links = 5000) 
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
 # --- 4. INITIALIZE SYSTEMS FOR THE RUN ---

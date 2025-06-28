@@ -475,3 +475,83 @@ func_09_fill_output <- function(chunk_name) {
   
   invisible(TRUE)
 }
+
+
+
+#####
+
+
+
+# 3. Function to update the main input.rds file with the latest status
+func_09_update_input <- function() {
+  
+  message("\n--- Updating master 'input.rds' with latest processing status ---")
+  
+  paths <- get_module_paths()
+  
+  # --- Define file paths ---
+  input_file <- file.path(paths$input, "input.rds")
+  processed_file <- file.path(paths$output, "final_data.rds")
+  retry_file <- file.path(paths$input, "retry.rds")
+  error_file <- file.path(paths$output, "error.rds")
+  parse_error_file <- file.path(paths$input, "parse_error.rds")
+  
+  # --- Load all necessary data files ---
+  
+  # Load master input file
+  if (!file.exists(input_file)) stop("Master 'input.rds' not found.")
+  input_dt <- readRDS(input_file)
+  
+  # Helper function to safely load a file and return an empty data.table if it doesn't exist
+  .load_safe <- function(path) {
+    if (file.exists(path)) {
+      return(as.data.table(readRDS(path)))
+    } else {
+      warning(paste("File not found, creating empty table:", basename(path)))
+      return(data.table(url = character())) # Return empty table with a 'url' column
+    }
+  }
+  
+  processed_dt <- .load_safe(processed_file)
+  retry_dt <- .load_safe(retry_file)
+  error_dt <- .load_safe(error_file)
+  parse_error_dt <- .load_safe(parse_error_file)
+  
+  # --- Create hash sets for efficient URL lookups ---
+  # Using unique() is crucial to avoid issues with duplicate URLs in log files
+  
+  processed_urls <- unique(processed_dt$url)
+  retry_urls <- unique(retry_dt$url)
+  error_urls <- unique(error_dt$url)
+  parse_error_urls <- unique(parse_error_dt$url)
+  
+  # --- Update the master input data.table by reference ---
+  # This is highly efficient and avoids creating copies of the data.
+  
+  # 1. Update 'processed' flag
+  processed_updates <- sum(input_dt[url %in% processed_urls, processed] == FALSE)
+  input_dt[url %in% processed_urls, processed := TRUE]
+  message(sprintf("Marked %d links as 'processed'.", processed_updates))
+  
+  # 2. Update 'retry' flag
+  retry_updates <- sum(input_dt[url %in% retry_urls, retry] == FALSE)
+  input_dt[url %in% retry_urls, retry := TRUE]
+  message(sprintf("Marked %d links for 'retry'.", retry_updates))
+  
+  # 3. Update 'error' flag
+  error_updates <- sum(input_dt[url %in% error_urls, error] == FALSE)
+  input_dt[url %in% error_urls, error := TRUE]
+  message(sprintf("Marked %d links as 'error'.", error_updates))
+  
+  # 4. Update 'parse_error' flag
+  parse_error_updates <- sum(input_dt[url %in% parse_error_urls, parse_error] == FALSE)
+  input_dt[url %in% parse_error_urls, parse_error := TRUE]
+  message(sprintf("Marked %d links as 'parse_error'.", parse_error_updates))
+  
+  # --- Save the updated data.table back to input.rds ---
+  saveRDS(input_dt, input_file)
+  
+  message("\n--- Master 'input.rds' has been successfully updated. ---")
+  
+  invisible(TRUE)
+}
