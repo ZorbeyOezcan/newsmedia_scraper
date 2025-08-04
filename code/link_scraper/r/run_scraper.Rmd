@@ -1,0 +1,155 @@
+---
+title: "Stabiler Web Scraper Lauf"
+author: "Zorbey Ozcan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+---
+
+
+```{r setup, message=TRUE, warning=FALSE}
+# --- 1. SETUP & CONFIGURATION ---
+setwd("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/r")
+
+# Helper function to define all necessary paths for the project
+get_module_paths <- function() {
+  base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
+  list(
+    input          = file.path(base_path, "data", "input"),
+    output         = file.path(base_path, "data", "output"),
+    config         = file.path(base_path, "data", "config"),
+    parsing_config = file.path(base_path, "data", "config", "06_parsing_config"),
+    state          = file.path(base_path, "data", "state"),
+    logs           = file.path(base_path, "data", "logs"),
+    chunk_logs     = file.path(base_path, "data", "logs",  "chunk_logs"),
+    chunk_outputs  = file.path(base_path, "data", "output", "chunk_outputs"),
+    chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs")
+  )
+}
+
+# --- 2. LOAD ALL MODULES ---
+message("Loading all required modules...")
+source("01_init.R")
+source("02_chunk_manager.R")
+source("03_identity_manager.R")
+source("04_request_orchestrator.R")
+source("05_request_executor.R")
+source("06_html_parser.R")
+source("07_response_analyzer.R")
+source("09_storage_manager.R")
+source("10_log_manager.R")
+message("All modules loaded successfully.")
+```
+
+
+
+```{r}
+# Update Master Input 
+func_09_update_input()
+
+# Protocoll used VPN
+func_03_initialzie_vpn_connnection()
+```
+
+
+```{r}
+# Build Chunk
+current_chunk <- func_02_build_chunk(absolute_links = 8) 
+func_02_plot_chunk_overview(current_chunk)
+message(sprintf("Successfully created chunk: %s", current_chunk))
+
+# Initialize data tables 
+func_09_init_data_structures(current_chunk)
+
+# Build Sessionpool 
+func_04_initialize_session_pool()
+
+```
+
+
+
+```{r}
+# Get Data for Chunk
+chunk_dt <- get(current_chunk, envir = .GlobalEnv)
+total_links <- nrow(chunk_dt)
+
+message(sprintf("\nStarting to process %d links from chunk %s...", total_links, current_chunk))
+message(paste(rep("=", 70), collapse = ""))
+
+# Initialize counters
+successful_count <- 0
+retry_count <- 0
+error_count <- 0
+parse_error_count <- 0
+
+# Process Links 
+if (total_links > 0) {
+  for (i in 1:total_links) {
+    link_info <- chunk_dt[i]
+    
+    message(sprintf("\n[%d/%d] Processing: %s", i, total_links, link_info$url))
+    
+    # --- complete Request -> Analysis -> Parse Pipeline ---
+    request_package <- func_04_prepare_request(id = link_info$id, url = link_info$url, domain = link_info$domain, chunk_dt = chunk_dt)
+    
+    if (request_package$success) {
+      response_result <- func_05_execute_request(request_package = request_package, chunk_name = current_chunk, worker_id = 1)
+      analysis_result <- func_07_analyze_response(response_result = response_result, chunk_name = current_chunk)
+      
+      # Update status
+      if (analysis_result$action == "parse") {
+        if (isTRUE(analysis_result$parse_result$success)) {
+          successful_count <- successful_count + 1
+          message("--> Status: SUCCESS")
+        } else {
+          parse_error_count <- parse_error_count + 1
+          message(sprintf("--> Status: PARSE_ERROR (%s)", analysis_result$parse_result$reason))
+        }
+      } else if (analysis_result$action == "retry") {
+        retry_count <- retry_count + 1
+        message(sprintf("--> Status: RETRY (%s)", analysis_result$response_analysis))
+      } else { # "error"
+        error_count <- error_count + 1
+        message(sprintf("--> Status: ERROR (%s)", analysis_result$message))
+      }
+    } else {
+      message(sprintf("Failed to prepare request: %s", request_package$message))
+      func_10_append_error(error_reason = request_package$message, processed_dt = data.table(id = link_info$id, domain = link_info$domain, url = link_info$url), chunk_name = current_chunk)
+      error_count <- error_count + 1
+    }
+    
+    # --- CHECKPOINT-LOGIC ---
+    if (i %% 1000 == 0 && i < total_links) {
+        message(paste(rep("=", 70), collapse = ""))
+        message(sprintf("CHECKPOINT: Saving data after %d requests...", i))
+        func_09_fill_output(current_chunk)
+        message("CHECKPOINT: Emptying data structures.")
+        func_09_init_data_structures(current_chunk)
+        message("CHECKPOINT: Finished.")
+        message(paste(rep("=", 70), collapse = ""))
+    }
+  }
+}
+
+message(paste(rep("=", 70), collapse = ""))
+message("CHUNK PROCESSING COMPLETE.")
+
+```
+
+
+```{r}
+# Final Saving process
+func_09_fill_output(current_chunk)
+
+# update input
+func_09_update_input()
+overview_final <- func_09_generate_overview_report(plot_summary = TRUE)
+
+# Show final report 
+print(overview_final)
+
+message("\nRun finished successfully!")
+```

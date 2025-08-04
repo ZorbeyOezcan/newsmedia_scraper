@@ -50,11 +50,13 @@ message("All modules loaded successfully.")
 # --- 3. CREATE A NEW CHUNK ---
 
 message("\nCreating a new chunk of links to process...")
-# This creates a new chunk with default settings (10% of remaining links)
-# The name of the chunk (e.g., "chunk_001") is returned and stored.
-
+# Updating Input with processed, retry, error links, etc. 
 func_09_update_input()
-current_chunk <- func_02_build_chunk(absolute_links = 5000) 
+
+# create new Chunk
+current_chunk <- func_02_build_chunk(absolute_links = 25000) 
+func_02_plot_chunk_overview(current_chunk)
+
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
 # --- 4. INITIALIZE SYSTEMS FOR THE RUN ---
@@ -160,6 +162,10 @@ message("CHUNK PROCESSING COMPLETE.")
 
 message("\nAppending all collected data to final RDS files...")
 # This function handles all appending operations safely
+func_09_update_input()
 func_09_fill_output(current_chunk)
+overview_04_07_25 <- func_09_generate_overview_report()
 
 message("\nRun finished successfully!")
+
+

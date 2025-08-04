@@ -23,6 +23,7 @@ library(ggplot2)
 # 1: Defining the chunk builder function
 func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
                                 absolute_links      = NULL,
+                                domains             = NULL,
                                 exclude_domains     = NULL,
                                 exclude_retry_links = FALSE,
                                 seed                = NULL) {
@@ -37,6 +38,12 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
   dt <- dt[processed == FALSE]
   if (exclude_retry_links) dt <- dt[retry == FALSE]
   if (!is.null(exclude_domains)) dt <- dt[!domain %in% exclude_domains]
+  
+  # filter for specific domains if the 'domains' argument is provided
+  if (!is.null(domains) && length(domains) > 0) {
+    dt <- dt[domain %in% domains]
+  }
+  
   if (nrow(dt) == 0) stop("No eligible links available for chunk creation.")
   
   # determine chunk size
@@ -93,6 +100,9 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
                                             chunk_proportion, "—"))
   message("absolute_links       : ", ifelse(is.null(absolute_links),
                                             "—", absolute_links))
+  message("domains              : ",
+          ifelse(is.null(domains), "—",
+                 paste(domains, collapse = ", ")))
   message("exclude_domains      : ",
           ifelse(is.null(exclude_domains), "FALSE",
                  paste(exclude_domains, collapse = ", ")))
@@ -105,19 +115,21 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
 
 # Calling the function: 
 # func_02_build_chunk()
-# func_02_build_chunk(chunk_proportion    = 1 / 20, absolute_links = 300, exclude_domains = "", exclude_retry_links = TRUE, seed = 1 )
-# chunk_01 <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/input/chunks/chunk_01.rds")
+
+
 
 ##### 
 
-# Visualise domain composition for:
+
+
+# Function to visualise domain composition for:
 #   – the entire input set,
 #   – all unprocessed links,
 #   – a provided chunk.
 
 func_02_plot_chunk_overview <- function(chunk,
-                                input_path = file.path(get_module_paths()$input,
-                                                       "input.rds")) {
+                                        input_path = file.path(get_module_paths()$input,
+                                                               "input.rds")) {
   # accept data.table/data.frame or file name
   if (inherits(chunk, c("data.table", "data.frame"))) {
     chunk_dt <- as.data.table(chunk)
@@ -153,4 +165,3 @@ func_02_plot_chunk_overview <- function(chunk,
 }
 
 # plot_chunk_overview(chunk_01)
-

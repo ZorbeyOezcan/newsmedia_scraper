@@ -22,8 +22,9 @@
 
 # Load required packages
 library(data.table)
+library(ggplot2)
 
-# Configuration Function
+# Configggplot2# Configuration Function
 
 # 1: Function to initialize chunk-specific data structures with validation
 func_09_init_data_structures <- function(chunk_name) {
@@ -555,3 +556,132 @@ func_09_update_input <- function() {
   
   invisible(TRUE)
 }
+
+
+
+#####
+
+
+
+# 4. Function to generate a comprehensive overview report of the scraping status
+func_09_generate_overview_report <- function(plot_summary = FALSE) {
+  
+  message("\n--- Generating scraping overview report ---")
+  
+  paths <- get_module_paths()
+  
+  # Helper function to safely load RDS files
+  .load_safe <- function(path, required_cols = "domain") {
+    if (!file.exists(path)) {
+      warning(sprintf("File not found: '%s'. Returning empty table.", basename(path)))
+      empty_dt <- data.table()
+      # Create empty columns of type character to avoid binding issues
+      for (col in required_cols) empty_dt[, (col) := character()]
+      return(empty_dt)
+    }
+    dt <- as.data.table(readRDS(path))
+    # Ensure required columns exist, adding them if they don't
+    for (col in required_cols) {
+      if (!col %in% names(dt)) dt[, (col) := NA_character_]
+    }
+    return(dt)
+  }
+  
+  # Load all necessary permanent data files
+  input_dt <- .load_safe(file.path(paths$input, "input.rds"), "domain")
+  output_dt <- .load_safe(file.path(paths$output, "final_data.rds"), "domain")
+  request_log_dt <- .load_safe(file.path(paths$logs, "request_log.rds"), "domain")
+  response_log_dt <- .load_safe(file.path(paths$logs, "response_log.rds"), "domain")
+  retry_dt <- .load_safe(file.path(paths$input, "retry.rds"), c("domain", "retry_reason"))
+  error_dt <- .load_safe(file.path(paths$output, "error.rds"), "domain")
+  parse_error_dt <- .load_safe(file.path(paths$input, "parse_error.rds"), "domain")
+  
+  # Calculate counts per domain
+  input_counts <- input_dt[, .(total_links_input = .N), by = domain]
+  output_counts <- output_dt[, .(total_processed = .N), by = domain]
+  request_counts <- request_log_dt[, .(total_requests = .N), by = domain]
+  response_counts <- response_log_dt[, .(total_responses = .N), by = domain]
+  retry_counts <- retry_dt[, .(total_retries = .N), by = domain]
+  error_counts <- error_dt[, .(total_error_links = .N), by = domain]
+  parse_error_counts <- parse_error_dt[, .(total_parse_error_links = .N), by = domain]
+  bot_detection_counts <- retry_dt[retry_reason == "bot_detected", .(total_bot_detections = .N), by = domain]
+  
+  # Get a list of all unique domains from the input file
+  all_domains <- unique(input_dt[, .(domain)])
+  
+  # Merge all counts into a single overview table
+  overview_dt <- merge(all_domains, input_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, output_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, request_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, response_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, retry_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, error_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, parse_error_counts, by = "domain", all.x = TRUE)
+  overview_dt <- merge(overview_dt, bot_detection_counts, by = "domain", all.x = TRUE)
+  
+  # Replace NA values with 0 for all numeric columns
+  numeric_cols <- names(which(sapply(overview_dt, is.numeric)))
+  for (col in numeric_cols) {
+    set(overview_dt, which(is.na(overview_dt[[col]])), col, 0)
+  }
+  
+  # Calculate success and error rates
+  overview_dt[, processing_success_rate := ifelse(total_links_input > 0, total_processed / total_links_input, 0)]
+  
+  # Calculate successful requests (responses that did not lead to a retry)
+  overview_dt[, total_successful_requests := total_responses - total_retries]
+  overview_dt[total_successful_requests < 0, total_successful_requests := 0] # Ensure non-negative
+  
+  overview_dt[, request_success_rate := ifelse(total_requests > 0, total_successful_requests / total_requests, 0)]
+  overview_dt[, error_rate := ifelse(total_requests > 0, total_error_links / total_requests, 0)]
+  overview_dt[, parse_error_rate := ifelse(total_requests > 0, total_parse_error_links / total_requests, 0)]
+  overview_dt[, bot_detection_rate := ifelse(total_requests > 0, total_bot_detections / total_requests, 0)]
+  
+  # Format rates as percentages for better readability in the table
+  rate_cols <- names(overview_dt)[grep("_rate$", names(overview_dt))]
+  for (col in rate_cols) {
+    overview_dt[, (col) := paste0(round(get(col) * 100, 2), "%")]
+  }
+  
+  message("Successfully generated overview table.")
+  
+  # Plotting logic
+  if (plot_summary) {
+    message("Generating summary plot...")
+    
+    # Calculate overall totals
+    totals <- overview_dt[, .(
+      Processed = sum(total_processed),
+      Errors = sum(total_error_links),
+      "Parse Errors" = sum(total_parse_error_links),
+      "Bot Detections" = sum(total_bot_detections),
+      "Other Retries" = sum(total_retries) - sum(total_bot_detections)
+    )]
+    
+    # Melt data for plotting
+    plot_data <- melt(totals, measure.vars = names(totals), variable.name = "Category", value.name = "Count")
+    
+    # Create the plot
+    p <- ggplot(plot_data, aes(x = reorder(Category, -Count), y = Count, fill = Category)) +
+      geom_bar(stat = "identity", show.legend = FALSE) +
+      geom_text(aes(label = scales::comma(Count)), vjust = -0.5, size = 4) +
+      scale_y_continuous(labels = scales::comma) +
+      labs(
+        title = "Overall Scraping Status",
+        subtitle = "Total counts across all domains",
+        x = "",
+        y = "Number of Links"
+      ) +
+      theme_minimal(base_size = 14) +
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      )
+    
+    print(p)
+  }
+  
+  return(overview_dt)
+}
+
