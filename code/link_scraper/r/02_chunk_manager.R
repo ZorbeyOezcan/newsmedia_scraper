@@ -21,12 +21,13 @@ library(data.table)
 library(ggplot2)
 
 # 1: Defining the chunk builder function
-func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
-                                absolute_links      = NULL,
-                                domains             = NULL,
-                                exclude_domains     = NULL,
-                                exclude_retry_links = FALSE,
-                                seed                = NULL) {
+func_02_build_chunk <- function(chunk_proportion          = 1 / 10,
+                                absolute_links            = NULL,
+                                domains                   = NULL,
+                                exclude_domains           = NULL,
+                                exclude_retry_links       = FALSE,
+                                exclude_parse_error_links = TRUE, 
+                                seed                      = NULL) {
   if (!is.null(seed)) set.seed(seed)             # reproducibility
   
   paths      <- get_module_paths()
@@ -37,6 +38,7 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
   # filter eligible links
   dt <- dt[processed == FALSE]
   if (exclude_retry_links) dt <- dt[retry == FALSE]
+  if (exclude_parse_error_links) dt <- dt[parse_error == FALSE] 
   if (!is.null(exclude_domains)) dt <- dt[!domain %in% exclude_domains]
   
   # filter for specific domains if the 'domains' argument is provided
@@ -94,19 +96,20 @@ func_02_build_chunk <- function(chunk_proportion    = 1 / 10,
   assign(chunk_name, sampled, envir = .GlobalEnv)
   
   # console summary
-  message("Chunk name           : ", chunk_name)
-  message("This chunk contains  : ", nrow(sampled), " links.")
-  message("chunk_proportion     : ", ifelse(is.null(absolute_links),
-                                            chunk_proportion, "—"))
-  message("absolute_links       : ", ifelse(is.null(absolute_links),
-                                            "—", absolute_links))
-  message("domains              : ",
+  message("Chunk name                 : ", chunk_name)
+  message("This chunk contains        : ", nrow(sampled), " links.")
+  message("chunk_proportion           : ", ifelse(is.null(absolute_links),
+                                                  chunk_proportion, "—"))
+  message("absolute_links             : ", ifelse(is.null(absolute_links),
+                                                  "—", absolute_links))
+  message("domains                    : ",
           ifelse(is.null(domains), "—",
                  paste(domains, collapse = ", ")))
-  message("exclude_domains      : ",
+  message("exclude_domains            : ",
           ifelse(is.null(exclude_domains), "FALSE",
                  paste(exclude_domains, collapse = ", ")))
-  message("exclude_retry_links  : ", exclude_retry_links)
+  message("exclude_retry_links        : ", exclude_retry_links)
+  message("exclude_parse_error_links  : ", exclude_parse_error_links) # New summary line
   
   
   invisible(chunk_name)

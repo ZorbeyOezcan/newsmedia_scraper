@@ -41,6 +41,7 @@ source("06_html_parser.R")
 source("07_response_analyzer.R")
 source("09_storage_manager.R")
 source("10_log_manager.R")
+source("12_parse_error_postprocessing.R")
 message("All modules loaded successfully.")
 ```
 
@@ -57,7 +58,7 @@ func_03_initialzie_vpn_connnection()
 
 ```{r}
 # Build Chunk
-current_chunk <- func_02_build_chunk(absolute_links = 8) 
+current_chunk <- func_02_build_chunk(absolute_links = 100000) 
 func_02_plot_chunk_overview(current_chunk)
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
@@ -147,6 +148,9 @@ func_09_fill_output(current_chunk)
 # update input
 func_09_update_input()
 overview_final <- func_09_generate_overview_report(plot_summary = TRUE)
+
+# split parse_error.rds
+func_12_process_parse_errors()
 
 # Show final report 
 print(overview_final)
