@@ -1123,6 +1123,8 @@ func_06_parse_html <- local({
   
   .sanitize_value <- function(value) {
     if (is.null(value) || length(value) == 0 || all(is.na(value))) return(NA_character_)
+    # Always take the first element and collapse multiple values into one string
+    value <- value[1] 
     return(as.character(value))
   }
   
@@ -1142,9 +1144,8 @@ func_06_parse_html <- local({
     
     html_content <- tryCatch(httr2::resp_body_string(response_result$httr2_response), error = function(e) NULL)
     
-    # If an error happens before temp_dt is created, we build a minimal data.table
-    # so that the append function always receives a consistent object type.
-    if (is.null(html_content) || nchar(html_content) == 0) {
+    # Robust check for NULL, NA, or empty content
+    if (is.null(html_content) || is.na(html_content) || nchar(html_content) == 0) {
       minimal_dt <- data.table(id = request_info$id, domain = request_info$domain, url = request_info$url)
       func_10_append_error("empty_html_content", minimal_dt, chunk_name)
       return(list(success = FALSE, data = NULL, reason = "empty_html_content"))
@@ -1184,8 +1185,9 @@ func_06_parse_html <- local({
       extracted_data <- tryCatch(parsing_func(html_parsed), error = function(e) list(error = e$message))
       
       if (is.null(extracted_data$error)) {
+        # Always take the first element [1] to prevent assignment errors
         if (!is.null(extracted_data$datetime) && length(extracted_data$datetime) > 0 && !all(is.na(extracted_data$datetime))) {
-          temp_dt$date_time <- extracted_data$datetime
+          temp_dt$date_time <- extracted_data$datetime[1]
         }
         temp_dt$author    <- .sanitize_value(extracted_data$author)
         temp_dt$headline  <- .sanitize_value(extracted_data$headline)

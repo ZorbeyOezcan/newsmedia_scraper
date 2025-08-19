@@ -58,7 +58,7 @@ func_03_initialzie_vpn_connnection()
 
 ```{r}
 # Build Chunk
-current_chunk <- func_02_build_chunk(absolute_links = 100000) 
+current_chunk <- func_02_build_chunk(absolute_links = 20000) 
 func_02_plot_chunk_overview(current_chunk)
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
