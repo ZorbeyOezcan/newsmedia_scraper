@@ -684,4 +684,3 @@ func_09_generate_overview_report <- function(plot_summary = FALSE) {
   
   return(overview_dt)
 }
-
