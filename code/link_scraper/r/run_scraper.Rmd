@@ -37,33 +37,44 @@ get_module_paths <- function() {
 # --- 2. LOAD ALL MODULES ---
 
 message("Loading all required modules...")
+# Load modules in order of dependency. 08 is the new core state manager.
 source("01_init.R")
 source("02_chunk_manager.R")
 source("03_identity_manager.R")
-source("04_request_orchestrator.R")
+source("08_domain_state_manager.R") 
+source("04_request_orchestrator.R") 
 source("05_request_executor.R")
 source("06_html_parser.R")
-source("07_response_analyzer.R")
+source("07_response_analyzer.R")   
 source("09_storage_manager.R")
 source("10_log_manager.R")
-source("12_parse_error_postprocessing.R")
-source("13_overview_manager.R")
+source("11_overview_manager.R")
+
 message("All modules loaded successfully.")
 
 ```
 
-
-
 ```{r, dev='png'}
 # --- 3. Prepare input data ---
 
-# Update Input metrics 
+# Level 1: Conservative (3 errors -> rotate, 3 kills -> block)
+# Level 2: Cautious (5 errors -> rotate, 5 kills -> block)
+# Level 3: Default (10 errors -> rotate, 5 kills -> block)
+# Level 4: Aggressive (20 errors -> rotate, 5 kills -> block)
+# Level 5: Very Aggressive - Never Block (30 errors -> rotate, never block domain)
+aggressiveness_level <- 4
+
+
+# Get clean input data
+func_09_clean_dupes()
+# Update Input metrics
 func_09_update_input()
 
 # Show overview
-overview_before_chunk_run <- func_13_generate_progress_report()
+overview_before_chunk_run <- func_11_generate_progress_report()
 
 ```
+
 
 
 ```{r}
@@ -73,71 +84,69 @@ overview_before_chunk_run <- func_13_generate_progress_report()
 func_03_initialzie_vpn_connnection()
 
 # Build Chunk
-current_chunk <- func_02_build_chunk(absolute_links = 500) 
+current_chunk <- func_02_build_chunk(absolute_links = 2000)
+chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately
 func_02_plot_chunk_overview(current_chunk)
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
-# Initialize data tables 
+# Initialize data tables for logging and output
 func_09_init_data_structures(current_chunk)
 
-# Build Sessionpool 
+# Build Sessionpool
 func_04_initialize_session_pool()
+
+# Initialize the domain state tracker for this chunk run
+func_08_initialize_tracker(unique(chunk_dt$domain))
 
 ```
 
-
-
 ```{r}
 # --- 5. Run Scraper ---
-# Get Data for Chunk
-chunk_dt <- get(current_chunk, envir = .GlobalEnv)
 total_links <- nrow(chunk_dt)
 
 message(sprintf("\nStarting to process %d links from chunk %s...", total_links, current_chunk))
 message(paste(rep("=", 70), collapse = ""))
 
-# Initialize counters
-successful_count <- 0
-retry_count <- 0
-error_count <- 0
-parse_error_count <- 0
-
-# Process Links 
 if (total_links > 0) {
   for (i in 1:total_links) {
     link_info <- chunk_dt[i]
     
     message(sprintf("\n[%d/%d] Processing: %s", i, total_links, link_info$url))
     
-    # --- complete Request -> Analysis -> Parse Pipeline ---
-    request_package <- func_04_prepare_request(id = link_info$id, url = link_info$url, domain = link_info$domain, chunk_dt = chunk_dt)
+    # --- The new, streamlined pipeline ---
+    # MODIFIED: Pass the aggressiveness_level to the orchestrator.
+    request_package <- func_04_prepare_request(
+        id = link_info$id,
+        url = link_info$url,
+        domain = link_info$domain,
+        chunk_dt = chunk_dt,
+        aggressiveness_level = aggressiveness_level # Pass the configured level
+    )
     
     if (request_package$success) {
       response_result <- func_05_execute_request(request_package = request_package, chunk_name = current_chunk, worker_id = 1)
       analysis_result <- func_07_analyze_response(response_result = response_result, chunk_name = current_chunk)
       
-      # Update status
-      if (analysis_result$action == "parse") {
-        if (isTRUE(analysis_result$parse_result$success)) {
-          successful_count <- successful_count + 1
-          message("--> Status: SUCCESS")
-        } else {
-          parse_error_count <- parse_error_count + 1
-          message(sprintf("--> Status: PARSE_ERROR (%s)", analysis_result$parse_result$reason))
-        }
-      } else if (analysis_result$action == "retry") {
-        retry_count <- retry_count + 1
-        message(sprintf("--> Status: RETRY (%s)", analysis_result$response_analysis))
-      } else { # "error"
-        error_count <- error_count + 1
-        message(sprintf("--> Status: ERROR (%s)", analysis_result$message))
-      }
+      final_action <- analysis_result$action
+      message(sprintf("--> Status: %s (%s)", toupper(final_action), analysis_result$response_analysis))
+      
     } else {
-      message(sprintf("Failed to prepare request: %s", request_package$message))
-      func_10_append_error(error_reason = request_package$message, processed_dt = data.table(id = link_info$id, domain = link_info$domain, url = link_info$url), chunk_name = current_chunk)
-      error_count <- error_count + 1
+      message(sprintf("--> Status: SKIPPED (%s)", request_package$message))
     }
     
+    # Check if all domains are exhausted to stop the chunk run early
+    all_domains_in_chunk <- unique(chunk_dt$domain)
+    current_states <- domain_tracker[domain %in% all_domains_in_chunk]
+    
+    # This logic now implicitly respects the kill_limit of the aggressiveness level
+    if (all(current_states$session_kill_count >= 5 & aggressiveness_level < 5) || 
+        (aggressiveness_level == 1 && all(current_states$session_kill_count >= 3))) {
+        message(paste(rep("=", 70), collapse = ""))
+        message("All domains in the chunk are blocked. Terminating chunk run early.")
+        message(paste(rep("=", 70), collapse = ""))
+        break
+    }
+
     # --- CHECKPOINT-LOGIC ---
     if (i %% 1000 == 0 && i < total_links) {
         message(paste(rep("=", 70), collapse = ""))
@@ -156,21 +165,23 @@ message("CHUNK PROCESSING COMPLETE.")
 
 ```
 
-
 ```{r}
 # --- 6. Save data ---
+
+# Clean dupes again
+func_09_clean_dupes()
 
 # Final Saving process
 func_09_fill_output(current_chunk)
 
 # split parse_error.rds
-func_12_process_parse_errors()
+func_09_process_parse_errors()
 
-# update input again 
+# update input again
 func_09_update_input()
 
 # update overview again for comparison
-overview_after_chunk_run <- func_13_generate_progress_report()
+overview_after_chunk_run <- func_11_generate_progress_report()
 
 ```
 
@@ -181,9 +192,9 @@ overview_after_chunk_run <- func_13_generate_progress_report()
 overview <- func_09_generate_overview_report(plot_summary = TRUE)
 
 # show chunk success
-func_13_compare_chunk_runs(overview_before_chunk_run, overview_after_chunk_run, chunk_dt)
+func_11_compare_chunk_runs(overview_before_chunk_run, overview_after_chunk_run, chunk_dt)
 
-# Show final report 
+# Show final report
 print(overview)
 
 message("\nRun finished successfully!")

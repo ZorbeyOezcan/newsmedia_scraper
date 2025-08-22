@@ -23,7 +23,7 @@ library(ggplot2)
 
 
 # --- Main Function to Generate Progress Report from input.rds ---
-func_13_generate_progress_report <- function() {
+func_11_generate_progress_report <- function() {
   
   # --- 1. Define File Paths ---
   paths <- get_module_paths()
@@ -121,12 +121,12 @@ func_13_generate_progress_report <- function() {
 }
 
 # Example of how to call the function:
-# overview_before_chunk_run <- func_13_generate_progress_report()
+# overview_before_chunk_run <- func_11_generate_progress_report()
 
 
 
 # --- Function to Compare Chunk Run Performance ---
-func_13_compare_chunk_runs <- function(overview_before, overview_after, chunk_dt) {
+func_11_compare_chunk_runs <- function(overview_before, overview_after, chunk_dt) {
   
   # --- 1. Validate Inputs ---
   if (!is.data.table(overview_before) || !is.data.table(overview_after) || !is.data.table(chunk_dt)) {
