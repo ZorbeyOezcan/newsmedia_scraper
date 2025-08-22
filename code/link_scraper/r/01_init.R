@@ -23,7 +23,7 @@ paths <- get_module_paths()
 
 # 00 Data structure check function 
 test_data_structure <- function(dt_name) {
-  codebook_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/code_book.xlsx"
+  codebook_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/codebook.xlsx"
   
   # Check if codebook exists
   if (!file.exists(codebook_path)) {

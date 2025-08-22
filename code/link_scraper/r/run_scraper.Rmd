@@ -9,9 +9,9 @@ output:
     theme: united
 ---
 
-
 ```{r setup, message=TRUE, warning=FALSE}
 # --- 1. SETUP & CONFIGURATION ---
+
 setwd("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/r")
 
 # Helper function to define all necessary paths for the project
@@ -26,11 +26,16 @@ get_module_paths <- function() {
     logs           = file.path(base_path, "data", "logs"),
     chunk_logs     = file.path(base_path, "data", "logs",  "chunk_logs"),
     chunk_outputs  = file.path(base_path, "data", "output", "chunk_outputs"),
-    chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs")
+    chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs"),
+    parse_error    = file.path(base_path, "data", "input", "parse_error")
   )
 }
 
+```
+
+```{r}
 # --- 2. LOAD ALL MODULES ---
+
 message("Loading all required modules...")
 source("01_init.R")
 source("02_chunk_manager.R")
@@ -44,25 +49,31 @@ source("10_log_manager.R")
 source("12_parse_error_postprocessing.R")
 source("13_overview_manager.R")
 message("All modules loaded successfully.")
+
 ```
 
 
 
-```{r}
-# Update Master Input 
+```{r, dev='png'}
+# --- 3. Prepare input data ---
+
+# Update Input metrics 
 func_09_update_input()
 
 # Show overview
-func_13_generate_progress_report()
+overview_before_chunk_run <- func_13_generate_progress_report()
 
-# Protocoll used VPN
-func_03_initialzie_vpn_connnection()
 ```
 
 
 ```{r}
+# --- 4. Prepare scraper infrastructure ---
+
+# Protocoll used VPN
+func_03_initialzie_vpn_connnection()
+
 # Build Chunk
-current_chunk <- func_02_build_chunk(absolute_links = 35000) 
+current_chunk <- func_02_build_chunk(absolute_links = 500) 
 func_02_plot_chunk_overview(current_chunk)
 message(sprintf("Successfully created chunk: %s", current_chunk))
 
@@ -77,6 +88,7 @@ func_04_initialize_session_pool()
 
 
 ```{r}
+# --- 5. Run Scraper ---
 # Get Data for Chunk
 chunk_dt <- get(current_chunk, envir = .GlobalEnv)
 total_links <- nrow(chunk_dt)
@@ -146,18 +158,34 @@ message("CHUNK PROCESSING COMPLETE.")
 
 
 ```{r}
+# --- 6. Save data ---
+
 # Final Saving process
 func_09_fill_output(current_chunk)
-
-# update input
-func_09_update_input()
-overview_final <- func_09_generate_overview_report(plot_summary = TRUE)
 
 # split parse_error.rds
 func_12_process_parse_errors()
 
+# update input again 
+func_09_update_input()
+
+# update overview again for comparison
+overview_after_chunk_run <- func_13_generate_progress_report()
+
+```
+
+```{r}
+# --- 7. Show results  ---
+
+# show chunk_overview
+overview <- func_09_generate_overview_report(plot_summary = TRUE)
+
+# show chunk success
+func_13_compare_chunk_runs(overview_before_chunk_run, overview_after_chunk_run, chunk_dt)
+
 # Show final report 
-print(overview_final)
+print(overview)
 
 message("\nRun finished successfully!")
+
 ```

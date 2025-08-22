@@ -9,16 +9,18 @@
 #
 # The pipeline is as follows:
 # 1. Load the main 'parse_error.rds' file.
-# 2. Split the data by the 'domain' column.
-# 3. For each domain, append the new entries to an existing domain-specific
+# 2. Load 'final_data.rds' to get a list of already successful URLs.
+# 3. Split the error data by the 'domain' column.
+# 4. For each domain, append new entries to an existing domain-specific
 #    'domain_name_parse_error.rds' file or create a new one if it doesn't exist.
-# 4. After appending, remove any duplicate entries based on the 'url' column
-#    within each domain-specific file.
-# 5. Once all entries have been successfully distributed, clear the main
+# 5. Remove any duplicate entries based on the 'url' column.
+# 6. Remove any entries that are already present in 'final_data.rds'.
+# 7. Once all entries have been successfully distributed, clear the main
 #    'parse_error.rds' file to prevent reprocessing.
 #
 # RECEIVES FROM:
 # - /data/input/parse_error.rds
+# - /data/output/final_data.rds (for cross-checking)
 #
 # OUTPUTS TO:
 # - /data/input/parse_error/ (domain-specific RDS files)
@@ -38,6 +40,7 @@ func_12_process_parse_errors <- function() {
   # Define paths for the main input file and the target directory
   main_parse_error_file <- file.path(paths$input, "parse_error.rds")
   domain_error_dir <- file.path(paths$input, "parse_error")
+  final_data_file <- file.path(paths$output, "final_data.rds")
   
   # Ensure the target directory for domain-specific files exists
   if (!dir.exists(domain_error_dir)) {
@@ -45,7 +48,18 @@ func_12_process_parse_errors <- function() {
     dir.create(domain_error_dir, recursive = TRUE)
   }
   
-  # --- 2. LOAD MAIN PARSE ERROR FILE ---
+  # --- 2. LOAD FINAL DATA FOR DUPLICATE CHECKING ---
+  if (file.exists(final_data_file)) {
+    message("Loading 'final_data.rds' to cross-reference successfully parsed URLs.")
+    final_data_dt <- readRDS(final_data_file)
+    # Create a simple vector of unique URLs for efficient lookup
+    successful_urls <- unique(final_data_dt$url)
+  } else {
+    message("Warning: 'final_data.rds' not found. Skipping check against final output.")
+    successful_urls <- character(0) # Create an empty vector to prevent errors
+  }
+  
+  # --- 3. LOAD MAIN PARSE ERROR FILE ---
   if (!file.exists(main_parse_error_file)) {
     stop("Main 'parse_error.rds' file not found. Aborting.")
   }
@@ -63,7 +77,7 @@ func_12_process_parse_errors <- function() {
   
   message(sprintf("Found %d entries to process.", nrow(parse_error_dt)))
   
-  # --- 3. SPLIT DATA BY DOMAIN AND PROCESS EACH ---
+  # --- 4. SPLIT DATA BY DOMAIN AND PROCESS EACH ---
   domain_list <- split(parse_error_dt, by = "domain")
   total_domains <- length(domain_list)
   message(sprintf("Splitting data into %d unique domains.", total_domains))
@@ -77,7 +91,7 @@ func_12_process_parse_errors <- function() {
     
     message(sprintf("\n[%d/%d] Processing domain: '%s'", i, total_domains, domain_name))
     
-    # --- 4. APPEND NEW ENTRIES TO EXISTING FILE OR CREATE NEW ---
+    # --- 5. APPEND NEW ENTRIES TO EXISTING FILE OR CREATE NEW ---
     if (file.exists(domain_file_path)) {
       # If file exists, load it and append new data
       message(sprintf("  -> Found existing file. Appending %d new entries.", nrow(domain_dt)))
@@ -90,25 +104,31 @@ func_12_process_parse_errors <- function() {
       combined_dt <- domain_dt
     }
     
-    # --- 5. REMOVE DUPLICATES ---
+    # --- 6. REMOVE DUPLICATES WITHIN THE PARSE ERROR LIST ---
     initial_rows <- nrow(combined_dt)
-    # The 'unique' function in data.table is highly optimized
     deduplicated_dt <- unique(combined_dt, by = "url")
-    final_rows <- nrow(deduplicated_dt)
     
-    duplicates_removed <- initial_rows - final_rows
+    duplicates_removed <- initial_rows - nrow(deduplicated_dt)
     if (duplicates_removed > 0) {
       message(sprintf("  -> Removed %d duplicate entries based on 'url'.", duplicates_removed))
     } else {
       message("  -> No duplicates found.")
     }
     
-    # --- 6. SAVE THE CLEANED DATA ---
-    message(sprintf("  -> Saving %d unique entries to: %s", final_rows, basename(domain_file_path)))
+    # --- 7. REMOVE ENTRIES ALREADY IN FINAL_DATA.RDS ---
+    # This step ensures I don't keep error logs for URLs that were eventually
+    # processed successfully, which for some reason made it into the parse error ds by accident. 
+    if (length(successful_urls) > 0) {
+      deduplicated_dt <- deduplicated_dt[!url %in% successful_urls]
+    }
+    
+    # --- 8. SAVE THE CLEANED DATA ---
+    final_rows <- nrow(deduplicated_dt)
+    message(sprintf("  -> Saving %d unique, unresolved entries to: %s", final_rows, basename(domain_file_path)))
     saveRDS(deduplicated_dt, domain_file_path)
   }
   
-  # --- 7. CLEAR THE MAIN PARSE ERROR FILE ---
+  # --- 9. CLEAR THE MAIN PARSE ERROR FILE ---
   message("\nAll entries have been processed and distributed.")
   message("Clearing the main 'parse_error.rds' file.")
   
@@ -125,4 +145,3 @@ func_12_process_parse_errors <- function() {
 
 # Call function if needed: 
 # func_12_process_parse_errors()
-

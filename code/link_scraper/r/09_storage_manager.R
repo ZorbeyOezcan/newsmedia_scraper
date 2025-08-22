@@ -486,7 +486,7 @@ func_09_fill_output <- function(chunk_name) {
 # 3. Function to update the main input.rds file with the latest status
 func_09_update_input <- function() {
   
-  message("\n--- Updating master 'input.rds' with latest processing status ---")
+  message("\n--- Updating 'input.rds' with latest processing status ---")
   
   paths <- get_module_paths()
   
@@ -495,7 +495,10 @@ func_09_update_input <- function() {
   processed_file <- file.path(paths$output, "final_data.rds")
   retry_file <- file.path(paths$input, "retry.rds")
   error_file <- file.path(paths$output, "error.rds")
-  parse_error_file <- file.path(paths$input, "parse_error.rds")
+  
+  # Paths for parse errors (main file and domain-specific directory)
+  main_parse_error_file <- file.path(paths$input, "parse_error.rds")
+  domain_parse_error_dir <- file.path(paths$input, "parse_error")
   
   # --- Load all necessary data files ---
   
@@ -516,38 +519,60 @@ func_09_update_input <- function() {
   processed_dt <- .load_safe(processed_file)
   retry_dt <- .load_safe(retry_file)
   error_dt <- .load_safe(error_file)
-  parse_error_dt <- .load_safe(parse_error_file)
   
-  # --- Create hash sets for efficient URL lookups ---
-  # Using unique() is crucial to avoid issues with duplicate URLs in log files
+  # --- Create hash sets for URL lookups ---
   
   processed_urls <- unique(processed_dt$url)
   retry_urls <- unique(retry_dt$url)
   error_urls <- unique(error_dt$url)
-  parse_error_urls <- unique(parse_error_dt$url)
+  
+  # --- Collect all parse error URLs from both main file and domain-specific files ---
+  
+  # 1. Get URLs from the main parse_error.rds file
+  main_parse_error_dt <- .load_safe(main_parse_error_file)
+  all_parse_error_urls <- unique(main_parse_error_dt$url)
+  
+  # 2. Get URLs from all files in the domain-specific parse_error directory
+  if (dir.exists(domain_parse_error_dir)) {
+    domain_files <- list.files(domain_parse_error_dir, pattern = "\\.rds$", full.names = TRUE)
+    
+    if (length(domain_files) > 0) {
+      # Use lapply to read all files and extract URLs, then combine them
+      domain_urls_list <- lapply(domain_files, function(file) {
+        dt <- readRDS(file)
+        return(dt$url)
+      })
+      # Combine all URL vectors into one
+      all_domain_urls <- unlist(domain_urls_list)
+      # Append to the main list
+      all_parse_error_urls <- c(all_parse_error_urls, all_domain_urls)
+    }
+  }
+  
+  # 3. Create a final, unique set of all parse error URLs
+  parse_error_urls <- unique(all_parse_error_urls)
   
   # --- Update the master input data.table by reference ---
-  # This is highly efficient and avoids creating copies of the data.
   
   # 1. Update 'processed' flag
-  processed_updates <- sum(input_dt[url %in% processed_urls, processed] == FALSE)
+  processed_updates <- sum(input_dt[url %in% processed_urls, processed] == FALSE, na.rm = TRUE)
   input_dt[url %in% processed_urls, processed := TRUE]
   message(sprintf("Marked %d links as 'processed'.", processed_updates))
   
   # 2. Update 'retry' flag
-  retry_updates <- sum(input_dt[url %in% retry_urls, retry] == FALSE)
+  retry_updates <- sum(input_dt[url %in% retry_urls, retry] == FALSE, na.rm = TRUE)
   input_dt[url %in% retry_urls, retry := TRUE]
   message(sprintf("Marked %d links for 'retry'.", retry_updates))
   
   # 3. Update 'error' flag
-  error_updates <- sum(input_dt[url %in% error_urls, error] == FALSE)
+  error_updates <- sum(input_dt[url %in% error_urls, error] == FALSE, na.rm = TRUE)
   input_dt[url %in% error_urls, error := TRUE]
   message(sprintf("Marked %d links as 'error'.", error_updates))
   
-  # 4. Update 'parse_error' flag
-  parse_error_updates <- sum(input_dt[url %in% parse_error_urls, parse_error] == FALSE)
+  # 4. Update 'parse_error' flag using the comprehensive URL list
+  parse_error_updates <- sum(input_dt[url %in% parse_error_urls, parse_error] == FALSE, na.rm = TRUE)
   input_dt[url %in% parse_error_urls, parse_error := TRUE]
-  message(sprintf("Marked %d links as 'parse_error'.", parse_error_updates))
+  message(sprintf("Marked %d links as 'parse_error' (checked main file and domain-specific files).", parse_error_updates))
   
   # --- Save the updated data.table back to input.rds ---
   saveRDS(input_dt, input_file)
@@ -683,4 +708,134 @@ func_09_generate_overview_report <- function(plot_summary = FALSE) {
   }
   
   return(overview_dt)
+}
+
+
+
+#####
+
+
+# 5. Function to clean duplicates in parse errors, input and output - just to make sure. 
+func_09_clean_dupes <- function() {
+  
+  message(paste(rep("=", 80), collapse = ""))
+  message("--- Starting Data Cleaning and Deduplication Process ---")
+  message(paste(rep("=", 80), collapse = ""))
+  
+  paths <- get_module_paths()
+  
+  # --- 1. special DEDUPLICATION FOR final_data.rds ---
+  
+  final_data_path <- file.path(paths$output, "final_data.rds")
+  if (file.exists(final_data_path)) {
+    message("\n--- Processing: final_data.rds ---")
+    dt <- readRDS(final_data_path)
+    initial_rows <- nrow(dt)
+    
+    # Find URLs that have duplicates
+    dupe_urls <- dt[, .N, by = url][N > 1, url]
+    
+    if (length(dupe_urls) > 0) {
+      # Separate unique entries from duplicates
+      unique_dt <- dt[!url %in% dupe_urls]
+      dupes_dt <- dt[url %in% dupe_urls]
+      
+      # Define columns to check for NAs and merge
+      merge_cols <- c("date_time", "author", "headline", "text")
+      
+      # Process each group of duplicates
+      merged_dupes <- dupes_dt[, {
+        # Count NAs in the key columns for each row
+        na_counts <- rowSums(is.na(.SD[, ..merge_cols]))
+        
+        # If NA counts are different, keep the row with the fewest NAs
+        if (length(unique(na_counts)) > 1) {
+          .SD[which.min(na_counts)]
+        } else {
+          # If NA counts are the same, merge them
+          # For each column, take the first non-NA value found
+          merged_row <- lapply(.SD, function(col) {
+            first_valid <- first(na.omit(col))
+            if (is.null(first_valid)) NA else first_valid
+          })
+          as.data.table(merged_row)
+        }
+      }, by = url]
+      
+      # Combine the unique entries with the newly merged duplicates
+      dt <- rbindlist(list(unique_dt, merged_dupes), use.names = TRUE, fill = TRUE)
+    }
+    
+    duplicates_removed <- initial_rows - nrow(dt)
+    message(sprintf("  -> Found and resolved %d duplicate entries.", duplicates_removed))
+    saveRDS(dt, final_data_path)
+  } else {
+    message("\n--- Skipping final_data.rds: File not found. ---")
+  }
+  
+  # --- 2. SIMPLE DEDUPLICATION FOR input.rds - this really shouldn't happen but just in case: 
+  
+  input_path <- file.path(paths$input, "input.rds")
+  if (file.exists(input_path)) {
+    message("\n--- Processing: input.rds ---")
+    dt <- readRDS(input_path)
+    initial_rows <- nrow(dt)
+    
+    # Keep only the first entry for each unique URL
+    dt <- unique(dt, by = "url")
+    
+    duplicates_removed <- initial_rows - nrow(dt)
+    message(sprintf("  -> Found and removed %d duplicate entries.", duplicates_removed))
+    saveRDS(dt, input_path)
+  } else {
+    message("\n--- Skipping input.rds: File not found. ---")
+  }
+  
+  # --- 3. PROCESS ALL PARSE_ERROR FILES - this is a redundancy to module 12 but just in case 
+  
+  parse_error_dir <- file.path(paths$input, "parse_error")
+  if (dir.exists(parse_error_dir)) {
+    message("\n--- Processing domain-specific parse_error files ---")
+    parse_error_files <- list.files(parse_error_dir, pattern = "\\.rds$", full.names = TRUE)
+    
+    # Load the cleaned final_data.rds to get a list of successful URLs
+    successful_urls <- if (file.exists(final_data_path)) {
+      readRDS(final_data_path)$url
+    } else {
+      character(0)
+    }
+    
+    for (file_path in parse_error_files) {
+      message(sprintf("  -> Processing: %s", basename(file_path)))
+      dt <- readRDS(file_path)
+      initial_rows <- nrow(dt)
+      
+      # Step 3a: Internal deduplication
+      dt <- unique(dt, by = "url")
+      internal_dupes_removed <- initial_rows - nrow(dt)
+      if (internal_dupes_removed > 0) {
+        message(sprintf("     - Removed %d internal duplicates.", internal_dupes_removed))
+      }
+      
+      # Step 3b: Cross-file deduplication against final_data.rds
+      if (length(successful_urls) > 0) {
+        rows_before_cross_check <- nrow(dt)
+        dt <- dt[!url %in% successful_urls]
+        cross_dupes_removed <- rows_before_cross_check - nrow(dt)
+        if (cross_dupes_removed > 0) {
+          message(sprintf("     - Removed %d entries already present in final_data.rds.", cross_dupes_removed))
+        }
+      }
+      
+      saveRDS(dt, file_path)
+    }
+  } else {
+    message("\n--- Skipping parse_error directory: Directory not found. ---")
+  }
+  
+  message(paste(rep("=", 80), collapse = ""))
+  message("--- Data Cleaning and Deduplication Process Finished ---")
+  message(paste(rep("=", 80), collapse = ""))
+  
+  return(invisible(TRUE))
 }
