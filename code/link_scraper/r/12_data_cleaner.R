@@ -18,8 +18,6 @@ library(stringr)
 
 # --- 1. CONFIGURATION & SETUP ---
 
-# Helper function to define all necessary paths for the project.
-# This ensures the script can locate the required RDS files.
 get_module_paths <- function() {
   base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
   list(
@@ -45,8 +43,7 @@ paths <- get_module_paths()
 )
 
 `berliner-kurier.de_excluded_links` <- c(
-  "ticketshop/",  
-  "topics/"      
+  "ticketshop/"
 )
 
 `berliner-zeitung.de_excluded_links` <- c(
@@ -59,7 +56,8 @@ paths <- get_module_paths()
 
 `bild.de_excluded_links` <- c(
   "regional/",
-  "tv/"
+  "tv/",
+  "unterhaltung/tv-fernsehformate/"
 )
 
 `bnn.de_excluded_links` <- c(
@@ -128,7 +126,8 @@ paths <- get_module_paths()
 
 `ndr.de_excluded_links` <- c(
   "fernsehen/", 
-  "geschichte/"
+  "geschichte/",
+  "kultur/sendungen/"
 )
 
 `news.de_excluded_links` <- c()
@@ -198,7 +197,8 @@ paths <- get_module_paths()
 
 `welt.de_excluded_links` <- c(
   "vermischtes/bilder-des-tages/",
-  "autor/"
+  "autor/",
+  "themen"
 )
 
 `wiwo.de_excluded_links` <- c()
@@ -211,7 +211,30 @@ paths <- get_module_paths()
 # -- B. General exclusion list for exact URLs --
 # Add any full URL here to remove it from all datasets.
 excluded_links <- c(
-  "https://www.berliner-kurier.de/"
+  "https://www.berliner-kurier.de/",
+  "https://www.berliner-kurier.de/topics", 
+  "https://www.berliner-kurier.de/kuendigung.297245",
+  
+  "https://www.mopo.de/purple_issue/",
+  "https://www.mopo.de/hamburg/gericht/",
+  "https://www.mopo.de/hamburg/polizei/",
+  
+  "https://www.swr3.de/aktuell/nachrichten/t-rex-teen-dino-badlands-100.html",
+  "https://www.swr3.de/aktuell/nachrichten/oktopus-wagen-mainz-pfandflaschen-102.html",
+  
+  "https://www.berliner-zeitung.de/",
+  "https://www.berliner-zeitung.de/topics",
+  
+  "https://www.noz.de/service",
+  "https://www.noz.de/deutschland-welt/politik/bundestagswahl/alice-weidel",
+  "https://www.noz.de/deutschland-welt/politik/bundestagswahl/olaf-scholz",
+  "https://www.noz.de/deutschland-welt/politik/bundestagswahl/robert-habeck",
+  "https://www.noz.de/lebenswelten/geld-verbraucher/noz-advertorial-vermoegenstag",
+  "https://www.noz.de/sport/amateurfussball-os/hallenfussball-os",
+  "https://www.noz.de/sport/ergebnisse-tabellen/fussball/kreisliga-os",
+  "https://www.noz.de/sport/fussball/champions-league",
+  "https://www.noz.de/sport/vfl-osnabrueck/spielplan",
+  "https://www.noz.de/sport/vfl-osnabrueck/tabelle"
 )
 
 
@@ -241,7 +264,6 @@ get_410_links <- function(log_path) {
 }
 
 
-# Main function to perform the cleaning process.
 # Main function to perform the cleaning process.
 clean_datasets <- function(paths) {
   message("\n--- Starting Data Cleaning Process ---")
@@ -281,7 +303,7 @@ clean_datasets <- function(paths) {
     file_type <- ifelse(grepl("input.rds", file_path), "input", "parse_error")
     
     if (initial_rows == 0) {
-      message("  File is empty, nothing to do.")
+      message("   File is empty, nothing to do.")
       next
     }
     
@@ -296,31 +318,27 @@ clean_datasets <- function(paths) {
     rows_before <- nrow(dt)
     exclusion_lists <- ls(pattern = "_excluded_links$", envir = .GlobalEnv)
     
-    # Für parse_error-Dateien die Ziel-Domain aus dem Dateinamen ableiten
     current_parse_domain <- if (file_type == "parse_error") {
-      sub("_parse_error\\.rds$", "", basename(file_path))  # z.B. "mopo.de"
+      sub("_parse_error\\.rds$", "", basename(file_path))
     } else NA_character_
     
     for (list_name in exclusion_lists) {
-      # list_name z.B. "n-tv.de_excluded_links"
-      domain_with_tld <- str_replace(list_name, "_excluded_links$", "")  # "n-tv.de"
+      domain_with_tld <- str_replace(list_name, "_excluded_links$", "")
       excluded_paths  <- get(list_name, envir = .GlobalEnv)
       if (length(excluded_paths) == 0) next
       
-      # Pfade zu Regex zusammenfassen
       paths_regex <- paste(excluded_paths, collapse = "|")
       
-      # Host exakt (mit TLD) matchen; www. optional
-      host_regex <- gsub("\\.", "\\\\.", domain_with_tld)  # "n-tv\\.de"
-      url_pattern_exact_host <- sprintf("^https?://(www\\.)?%s/.*?(%s)", host_regex, paths_regex)
+      host_regex <- gsub("\\.", "\\\\.", domain_with_tld)
+      
+      # This regex now correctly looks for the domain followed by one of the excluded paths.
+      url_pattern_exact_host <- sprintf("^https?://(www\\.)?%s/(%s)", host_regex, paths_regex)
       
       if (file_type == "input") {
-        # NUR löschen, wenn URL+Pfad passt UND domain-Spalte exakt gleich der TLD-Domain ist
+        # The comparison now correctly uses the 'domain' column which contains the TLD.
         dt <- dt[!(str_detect(url, url_pattern_exact_host) & domain == domain_with_tld)]
       } else {
-        # parse_error: Nur anwenden, wenn diese Exclusion-Liste zur aktuellen parse_error-Datei gehört
         if (!identical(current_parse_domain, domain_with_tld)) next
-        # In parse_error.rds nur die URL prüfen (domain-Spalte hier irrelevant)
         dt <- dt[!str_detect(url, url_pattern_exact_host)]
       }
     }
@@ -328,44 +346,40 @@ clean_datasets <- function(paths) {
     report_counters[[file_type]]$path <- report_counters[[file_type]]$path + (rows_before - nrow(dt))
     
     # -- C. Remove by special domain-specific rules --
+    # This section is now corrected to use the full domain name with TLD for comparisons.
     rows_before <- nrow(dt)
     
     # mdr.de: ends with index.html
     dt <- dt[!(domain == 'mdr.de' & str_detect(url, "index\\.html$"))]
     
-    # rp-online.de: contains specific strings
+    # rp-online.de: contains video strings
     dt <- dt[!(domain == 'rp-online.de' & str_detect(url, "_bid-|_vid-|_iid-"))]
     
-    # taz.de: contains specific string
-    dt <- dt[!(domain == 'taz.de' & str_detect(url, "/!t5"))]
+    # taz.de: contains video strings or is a column
+    dt <- dt[!(domain == 'taz.de' & (str_detect(url, "/!t5") | str_detect(url, "taz\\.de/Kolumne-")))]
     
     # br.de: contains "kontakt"
     dt <- dt[!(domain == 'br.de' & str_detect(url, "kontakt"))]
     
     # Rules based on URL path structure
     if(nrow(dt) > 0) {
-      # Extract path and count segments
-      dt[, path_segments := str_count(str_remove(url, "^https?://[^/]+"), "/")]
-      
       # newsflash24.de & rtl.de: exactly one segment after domain
-      dt <- dt[!(domain %in% c('newsflash24.de', 'rtl.de') & path_segments == 1)]
+      dt <- dt[!(domain %in% c('newsflash24.de','rtl.de') &
+                   grepl("^https?://(?:www\\.)?(newsflash24\\.de|rtl\\.de)/[^/]+/?$", url))]
       
       # tag24.de: exactly two segments after domain
-      dt <- dt[!(domain == 'tag24.de' & path_segments == 2)]
-      
-      # Remove helper column
-      dt[, path_segments := NULL]
+      dt <- dt[!(domain == 'tag24.de' & str_count(str_remove(url, "^https?://[^/]+"), "/") == 2)]
     }
     report_counters[[file_type]]$special <- report_counters[[file_type]]$special + (rows_before - nrow(dt))
     
     # -- D. Report and Save --
     total_removed <- initial_rows - nrow(dt)
     if (total_removed > 0) {
-      message(sprintf("  -> Removed %d rows in total from this file.", total_removed))
+      message(sprintf("   -> Removed %d rows in total from this file.", total_removed))
       saveRDS(dt, file_path)
-      message(sprintf("  Saved cleaned data back to %s.", basename(file_path)))
+      message(sprintf("   Saved cleaned data back to %s.", basename(file_path)))
     } else {
-      message("  No links matching exclusion criteria were found in this file.")
+      message("   No links matching exclusion criteria were found in this file.")
     }
   }
   
@@ -376,14 +390,14 @@ clean_datasets <- function(paths) {
   message(paste(rep("-", 50), collapse = ""))
   
   message("\nFrom input.rds:")
-  message(sprintf("  %d entries deleted by exact URL match (incl. 410s).", report_counters$input$exact))
-  message(sprintf("  %d entries deleted by excluded domain paths.", report_counters$input$path))
-  message(sprintf("  %d entries deleted by special domain rules.", report_counters$input$special))
+  message(sprintf("   %d entries deleted by exact URL match (incl. 410s).", report_counters$input$exact))
+  message(sprintf("   %d entries deleted by excluded domain paths.", report_counters$input$path))
+  message(sprintf("   %d entries deleted by special domain rules.", report_counters$input$special))
   
   message("\nFrom all Parse Error datasets combined:")
-  message(sprintf("  %d entries deleted by exact URL match (incl. 410s).", report_counters$parse_error$exact))
-  message(sprintf("  %d entries deleted by excluded domain paths.", report_counters$parse_error$path))
-  message(sprintf("  %d entries deleted by special domain rules.", report_counters$parse_error$special))
+  message(sprintf("   %d entries deleted by exact URL match (incl. 410s).", report_counters$parse_error$exact))
+  message(sprintf("   %d entries deleted by excluded domain paths.", report_counters$parse_error$path))
+  message(sprintf("   %d entries deleted by special domain rules.", report_counters$parse_error$special))
   
   message(paste(rep("=", 50), collapse = ""))
 }
@@ -504,3 +518,4 @@ clean_final_and_append_discarded <- function(paths) {
 # --- Execute for provided paths ------------------------------------------------
 paths <- get_module_paths()
 clean_final_and_append_discarded(paths)
+

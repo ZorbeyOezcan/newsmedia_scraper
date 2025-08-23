@@ -1,10 +1,10 @@
 ---
-title: "Stabiler Web Scraper Lauf"
+title: "Scraping Pipeline"
 author: "Zorbey Ozcan"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    toc: true
+    toc: true/
     toc_float: true
     theme: united
 ---
@@ -62,13 +62,7 @@ message("All modules loaded successfully.")
 # Level 3: Default (10 errors -> rotate, 5 kills -> block)
 # Level 4: Aggressive (20 errors -> rotate, 5 kills -> block)
 # Level 5: Very Aggressive - Never Block (30 errors -> rotate, never block domain)
-aggressiveness_level <- 4
-
-
-# Get clean input data
-func_09_clean_dupes()
-# Update Input metrics
-func_09_update_input()
+aggressiveness_level <- 2
 
 # Show overview
 overview_before_chunk_run <- func_11_generate_progress_report()
@@ -83,11 +77,25 @@ overview_before_chunk_run <- func_11_generate_progress_report()
 # Protocoll used VPN
 func_03_initialzie_vpn_connnection()
 
+# Almost finished Domains: 
+target_domains <- c(
+  "wa.de",  "welt.de", "kreiszeitung.de", "n-tv.de",
+  "augsburger-allgemeine.de", "ruhr24.de", "noz.de",
+  "berliner-kurier.de", "presseportal.de", "echo24.de", "fnp.de",
+  "berliner-zeitung.de", "newsflash24.de", "heidelberg24.de", "taz.de",
+   "bild.de"
+)
+
 # Build Chunk
-current_chunk <- func_02_build_chunk(absolute_links = 2000)
+current_chunk <- func_02_build_chunk(
+  absolute_links = 3000,
+  domains = target_domains
+)
+
 chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately
 func_02_plot_chunk_overview(current_chunk)
 message(sprintf("Successfully created chunk: %s", current_chunk))
+
 
 # Initialize data tables for logging and output
 func_09_init_data_structures(current_chunk)
