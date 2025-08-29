@@ -121,8 +121,7 @@ func_11_generate_progress_report <- function() {
 }
 
 # Example of how to call the function:
-# overview_before_chunk_run <- func_11_generate_progress_report()
-
+# overview <- func_11_generate_progress_report()
 
 
 # --- Function to Compare Chunk Run Performance ---

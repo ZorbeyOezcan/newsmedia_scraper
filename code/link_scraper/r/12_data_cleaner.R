@@ -178,7 +178,9 @@ paths <- get_module_paths()
 
 `swr3.de_excluded_links` <- c()
 
-`t3n.de_excluded_links` <- c()
+`t3n.de_excluded_links` <- c(
+  "tag/"
+)
 
 `tag24.de_excluded_links` <- c(
   "thema/",
@@ -211,9 +213,26 @@ paths <- get_module_paths()
 # -- B. General exclusion list for exact URLs --
 # Add any full URL here to remove it from all datasets.
 excluded_links <- c(
+  "https://www.augsburger-allgemeine.de/sport/fc-augsburg/fc-augsburg-unter-thorup-jubilaeum-und-chance-auf-ungeschlagene-serie-gegen-gladbach-106034005", 
+  
   "https://www.berliner-kurier.de/",
   "https://www.berliner-kurier.de/topics", 
   "https://www.berliner-kurier.de/kuendigung.297245",
+  
+  "http://www.br.de/franken/inhalt/nachrichten/index.html",
+  "http://www.br.de/radio/bayern2/sendungen/weltempfaenger/index.html",
+  "http://www.br.de/radio/bayern2/sendungen/bayern-2-am-samstagvormittag/index.html",
+  "http://www.br.de/frech-und-frei-naerrisches-aus-franken/index.html",
+  "http://www.br.de/radio/bayern2/sendungen/gesundheitsgespraech/index.html",
+  "http://www.br.de/puls/programm/internet-girl/index.html",
+  "http://www.br.de/naerrische-weinprobe/index.html",
+  "http://www.br.de/kinder/hoeren/pumuckl/index.html",
+  "http://www.br.de/puls/programm/puls-radio/index.html",
+  "http://www.br.de/radio/bayern2/podcasts/uwe-timm-ikarien/index.html",
+  "http://www.br.de/kinder/hoeren/index.html",
+  "http://www.br.de/fastnacht-in-franken/index.html",
+  "http://www.br.de/franken/inhalt/kultur/index.html",
+  "http://www.br.de/kinder/schauen/pumuckl/index.html",
   
   "https://www.mopo.de/purple_issue/",
   "https://www.mopo.de/hamburg/gericht/",

@@ -154,6 +154,38 @@ setup_parser_rules <- function() {
       invisible(NULL)
     }
     "
+      # Define the html_search function as a string to be injected
+      html_search_def <- '
+      html_search <- function(html, selectors, attributes = NULL, all = TRUE, n = 1L) {
+        if (all) {
+            res <- rvest::html_elements(html, paste0(selectors, collapse = ","))
+        } else {
+            res <- NULL
+            i <- 1L
+            l <- length(selectors)
+            while (length(res) < 1 && i <= l) {
+                res <- rvest::html_elements(html, selectors[i])
+                i <- i + 1
+            }
+        }
+
+        want_text <- "text" %in% attributes
+        if (want_text) attributes <- setdiff(attributes, "text")
+
+        out <- rvest::html_attrs(res) %>%
+            unlist(recursive = FALSE) %>%
+            subset(., names(.) %in% attributes) %>%
+            unname()
+
+        if (want_text) out <- c(out, rvest::html_text2(res))
+
+        if (is.null(out)) {
+            return(NA_character_)
+        } else {
+            return(utils::head(out, n))
+        }
+      }
+      '
       
       wrapper_function_text <- sprintf(
         "function(html) {
@@ -169,7 +201,8 @@ setup_parser_rules <- function() {
         headline <- NA_character_
         text <- NA_character_
 
-        # Define helper function
+        # Define helper functions
+        %s
         %s
 
         # Execute parsing logic within a tryCatch block
@@ -192,6 +225,7 @@ setup_parser_rules <- function() {
         })
       }",
         custom_s_n_list_def,
+        html_search_def,
         paste(body_lines, collapse = "\n")
       )
       
@@ -358,7 +392,7 @@ setup_parser_rules <- function() {
   ))
 }
 
-# Run once 
+# Run once
 # setup_parser_rules()
 rm(setup_parser_rules)
 
@@ -392,15 +426,15 @@ setup_paywall_rules <- function() {
   message("Loading paywall domains CSV...")
   
   # Read CSV with proper handling
-  paywall_data <- fread(paywall_csv_path, 
-                        sep = ";", 
+  paywall_data <- fread(paywall_csv_path,
+                        sep = ";",
                         encoding = "UTF-8",
                         header = TRUE,
                         blank.lines.skip = TRUE)
   
   # Clean column names
-  setnames(paywall_data, 
-           old = names(paywall_data), 
+  setnames(paywall_data,
+           old = names(paywall_data),
            new = c("domain", "paywall_url", "free_url"))
   
   # Clean domain names
@@ -450,7 +484,7 @@ setup_paywall_rules <- function() {
     for (i in 1:nrow(links_to_fetch)) {
       link_info <- links_to_fetch[i]
       
-      message(sprintf("[%d/%d] Fetching %s URL for domain: %s", 
+      message(sprintf("[%d/%d] Fetching %s URL for domain: %s",
                       i, nrow(links_to_fetch), link_info$label, link_info$domain))
       
       html_content <- NA_character_
@@ -485,7 +519,7 @@ setup_paywall_rules <- function() {
       # Fallback to direct HTTP if pipeline fails
       if (is.na(html_content)) {
         tryCatch({
-          response <- GET(link_info$url, 
+          response <- GET(link_info$url,
                           timeout(30),
                           user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"))
           
@@ -517,7 +551,7 @@ setup_paywall_rules <- function() {
     if (length(html_results) > 0) {
       html_storage <- rbindlist(html_results, use.names = TRUE)
       saveRDS(html_storage, html_storage_path)
-      message(sprintf("\nHTML storage saved with %d entries to: %s", 
+      message(sprintf("\nHTML storage saved with %d entries to: %s",
                       nrow(html_storage), html_storage_path))
     } else {
       stop("No HTML content could be fetched. Aborting.")
@@ -545,7 +579,7 @@ setup_paywall_rules <- function() {
     "meinaz", "mein az", "azplus", "badge-meine_azplus",
     "artdetail_paywall", "funnelentry", "abo-start", "mein abo",
     "freischalten", "weiterlesen", "abo-wall", "angebot", "paywall-layer",
-    "offerlink", "fp-paywall", "aboWall", "Beliebtestes Angebot", 
+    "offerlink", "fp-paywall", "aboWall", "Beliebtestes Angebot",
     "6 Wochen kostenlos testen", "Inklusive Zugriff auf die digitale Zeitung",
     "\\d+[,.]\\d+\\s*€.*(/\\s*(Monat|Woche))"
   )
@@ -622,7 +656,7 @@ setup_paywall_rules <- function() {
         for (attr_name in names(all_attrs)) {
           attr_value <- all_attrs[[attr_name]]
           
-          if (grepl(keyword, attr_name, ignore.case = TRUE) || 
+          if (grepl(keyword, attr_name, ignore.case = TRUE) ||
               (!is.na(attr_value) && grepl(keyword, attr_value, ignore.case = TRUE))) {
             
             if (attr_name == "class") {
@@ -696,7 +730,7 @@ setup_paywall_rules <- function() {
       meta_property <- html_attr(meta, "property")
       meta_content <- html_attr(meta, "content")
       
-      if (!is.na(meta_content) && 
+      if (!is.na(meta_content) &&
           grepl("subscription|premium|paid|metered", meta_content, ignore.case = TRUE)) {
         if (!is.na(meta_name)) {
           meta_markers <- c(meta_markers, sprintf('meta[name="%s"]', meta_name))
@@ -890,7 +924,7 @@ setup_paywall_rules <- function() {
     # Print summary
     message(sprintf("  Has paywall: %s", TRUE))
     message(sprintf("  Total markers found: %d", n_markers))
-    message(sprintf("  Successful fetches - Free: %d, Paywall: %d", 
+    message(sprintf("  Successful fetches - Free: %d, Paywall: %d",
                     nrow(free_html_data), nrow(paywall_html_data)))
   }
   
@@ -1049,17 +1083,17 @@ rm(setup_bot_detection_rules)
 
 
 
-# 4. Main callable parsing function 
+# 4. Main callable parsing function
 func_06_parse_html <- local({
   
   # --- Private Caching Environment ---
   .parser_rules_cache <- NULL
   .paywall_rules_cache <- NULL
-  .bot_rules_cache <- NULL 
+  .bot_rules_cache <- NULL
   
   # --- Internal helper function to load rules if needed ---
   .load_cached_rules <- function() {
-    paths <- get_module_paths() 
+    paths <- get_module_paths()
     
     if (is.null(.parser_rules_cache)) {
       parser_rules_path <- file.path(paths$parsing_config, "06_parser_rules_fetched.rds")
@@ -1112,8 +1146,8 @@ func_06_parse_html <- local({
       if (stringr::str_detect(combined_text, stringr::fixed(keyword, ignore_case = TRUE))) return(TRUE)
     }
     all_scripts <- rvest::html_nodes(html_parsed, "script")
-    all_script_content <- paste(rvest::html_attr(all_scripts, "src"), 
-                                rvest::html_text(all_scripts), 
+    all_script_content <- paste(rvest::html_attr(all_scripts, "src"),
+                                rvest::html_text(all_scripts),
                                 collapse = " ")
     for (pattern in bot_rules$js_patterns) {
       if (stringr::str_detect(all_script_content, stringr::fixed(pattern))) return(TRUE)
@@ -1124,7 +1158,7 @@ func_06_parse_html <- local({
   .sanitize_value <- function(value) {
     if (is.null(value) || length(value) == 0 || all(is.na(value))) return(NA_character_)
     # Always take the first element and collapse multiple values into one string
-    value <- value[1] 
+    value <- value[1]
     return(as.character(value))
   }
   
@@ -1174,7 +1208,7 @@ func_06_parse_html <- local({
     
     temp_dt$bot_detect <- .check_bot_detection(html_parsed, .bot_rules_cache)
     if (isTRUE(temp_dt$bot_detect)) {
-      func_10_append_retry("bot_detected", request_info, chunk_name) 
+      func_10_append_retry("bot_detected", request_info, chunk_name)
       return(list(success = FALSE, data = temp_dt, reason = "bot_detected"))
     }
     
@@ -1208,6 +1242,17 @@ func_06_parse_html <- local({
       }
     }
     
+    # Special rule for augsburger-allgemeine.de for dpa articles
+    if (domain_clean == "augsburger-allgemeine" &&
+        !is.na(temp_dt$headline) && !is.na(temp_dt$date_time) &&
+        (is.na(temp_dt$text) || nchar(trimws(temp_dt$text)) == 0) &&
+        (is.na(temp_dt$author) || nchar(trimws(temp_dt$author)) == 0)) {
+      
+      temp_dt[, text := headline]
+      temp_dt[, headline := NA_character_]
+      temp_dt[, author := "dpa"]
+    }
+    
     # This ensures no empty strings ("") are passed, only proper NAs.
     temp_dt[is.na(date_time), date_time := as.POSIXct(NA)]
     temp_dt[is.na(author) | nchar(trimws(author)) == 0, author := NA_character_]
@@ -1225,7 +1270,7 @@ func_06_parse_html <- local({
     if (!is_na_date_time && !is_na_text) {
       func_10_append_output(temp_dt, chunk_name)
       return(list(success = TRUE, data = temp_dt))
-    } else if (isTRUE(paywall_for_routing)) { 
+    } else if (isTRUE(paywall_for_routing)) {
       func_10_append_error("paywalled_content_or_missing_fields", temp_dt, chunk_name)
       return(list(success = FALSE, data = temp_dt, reason = "paywalled_content_or_missing_fields"))
     } else {
@@ -1234,3 +1279,4 @@ func_06_parse_html <- local({
     }
   }
 })
+

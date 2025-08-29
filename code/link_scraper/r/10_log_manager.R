@@ -55,7 +55,7 @@ func_10_log_request <- function(request_package,
   request_id <- last_id + 1L
   
   # obtain IP from VPN log 
-  vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
+  vpn_log_path <- file.path(get_module_paths()$logs, "03_vpn_log.rds")
   current_ip   <- if (file.exists(vpn_log_path)) {
     vpn_log <- readRDS(vpn_log_path)
     vpn_log[order(last_used, decreasing = TRUE)][1]$ip_address
@@ -142,7 +142,8 @@ func_10_log_response <- function(response_result,
   if (response_result$success && !is.null(response_result$httr2_response)) {
     resp <- response_result$httr2_response
     status_code    <- tryCatch(resp_status(resp), error = function(e) NA_integer_)
-    response_headers <- tryCatch(resp_headers(resp), error = function(e) list())
+    # Convert headers to a plain list to ensure structural consistency for rbind
+    response_headers <- tryCatch(as.list(resp_headers(resp)), error = function(e) list())
     content_type   <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
     content_length <- tryCatch(as.integer(resp_header(resp, "content-length")), error = function(e) NA_integer_)
     server         <- tryCatch(as.character(resp_header(resp, "server")), error = function(e) NA_character_)
@@ -155,7 +156,7 @@ func_10_log_response <- function(response_result,
     }
   }
   
-  vpn_log_path <- file.path(get_module_paths()$logs, "vpn_log.rds")
+  vpn_log_path <- file.path(get_module_paths()$logs, "03_vpn_log.rds")
   current_ip   <- if (file.exists(vpn_log_path)) {
     readRDS(vpn_log_path)[order(last_used, decreasing = TRUE)][1]$ip_address
   } else NA_character_

@@ -60,9 +60,11 @@ message("All modules loaded successfully.")
 # Level 1: Conservative (3 errors -> rotate, 3 kills -> block)
 # Level 2: Cautious (5 errors -> rotate, 5 kills -> block)
 # Level 3: Default (10 errors -> rotate, 5 kills -> block)
+  # "3" = list(error_limit = 10, kill_limit = 10),
+  # "4" = list(error_limit = 20, kill_limit = 15),
 # Level 4: Aggressive (20 errors -> rotate, 5 kills -> block)
 # Level 5: Very Aggressive - Never Block (30 errors -> rotate, never block domain)
-aggressiveness_level <- 2
+aggressiveness_level <- 5
 
 # Show overview
 overview_before_chunk_run <- func_11_generate_progress_report()
@@ -77,19 +79,12 @@ overview_before_chunk_run <- func_11_generate_progress_report()
 # Protocoll used VPN
 func_03_initialzie_vpn_connnection()
 
-# Almost finished Domains: 
-target_domains <- c(
-  "wa.de",  "welt.de", "kreiszeitung.de", "n-tv.de",
-  "augsburger-allgemeine.de", "ruhr24.de", "noz.de",
-  "berliner-kurier.de", "presseportal.de", "echo24.de", "fnp.de",
-  "berliner-zeitung.de", "newsflash24.de", "heidelberg24.de", "taz.de",
-   "bild.de"
-)
+domains= "fr.de"
 
 # Build Chunk
 current_chunk <- func_02_build_chunk(
-  absolute_links = 3000,
-  domains = target_domains
+  domains = domains,
+  absolute_links = 500
 )
 
 chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately

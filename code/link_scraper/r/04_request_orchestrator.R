@@ -149,8 +149,8 @@ func_04_prepare_request <- function(id, url, domain, chunk_dt = NULL, aggressive
   thresholds <- switch(as.character(aggressiveness_level),
                        "1" = list(error_limit = 3,  kill_limit = 3),
                        "2" = list(error_limit = 5,  kill_limit = 5),
-                       "3" = list(error_limit = 10, kill_limit = 5),
-                       "4" = list(error_limit = 20, kill_limit = 5),
+                       "3" = list(error_limit = 10, kill_limit = 10),
+                       "4" = list(error_limit = 20, kill_limit = 15),
                        "5" = list(error_limit = 30, kill_limit = Inf), # Inf means never block
                        # Default case if an invalid level is provided
                        list(error_limit = 5, kill_limit = 5)
