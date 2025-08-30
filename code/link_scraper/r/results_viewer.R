@@ -32,3 +32,8 @@ processed_true_n <- sum(input_test$processed, na.rm = TRUE)
 
 # Anzahl der Einträge mit processed == FALSE
 processed_false_n <- sum(input_test$processed == FALSE, na.rm = TRUE)
+
+
+# Zählt die Zeilen, bei denen eine der beiden Bedingungen zutrifft
+input_test[processed == TRUE | parse_error == TRUE, .N]
+

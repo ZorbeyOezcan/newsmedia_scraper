@@ -110,7 +110,6 @@ func_10_log_request <- function(request_package,
 }
 
 
-
 # 2. Function to log HTTP response parameters
 func_10_log_response <- function(response_result,
                                  chunk_name        = current_chunk,
@@ -121,6 +120,14 @@ func_10_log_response <- function(response_result,
   }
   if (is.null(chunk_name) || !grepl("^chunk_\\d{3}$", chunk_name)) {
     stop("chunk_name must look like 'chunk_001', 'chunk_123', …")
+  }
+  
+  # Helper function to ensure values are length 1, defaulting to NA.
+  .sanitize_log_value <- function(value, default_na) {
+    if (is.null(value) || length(value) == 0) {
+      return(default_na)
+    }
+    return(value[1]) # Return only the first element
   }
   
   dt_name   <- paste0(chunk_name, "_response_log")
@@ -134,25 +141,26 @@ func_10_log_response <- function(response_result,
   request_id   <- ifelse(is.null(request_info$request_id), NA_integer_, request_info$request_id)
   chunk_number <- as.integer(gsub("chunk_", "", chunk_name))
   
-  # Defaults for all fields
+  # Initialize all variables with NA defaults
   status_code <- NA_integer_; response_headers <- list(); server_date <- as.POSIXct(NA)
   content_type <- NA_character_; content_length <- NA_integer_; server <- NA_character_
   dns_time <- NA_real_; connect_time <- NA_real_; total_time <- NA_real_
   
   if (response_result$success && !is.null(response_result$httr2_response)) {
     resp <- response_result$httr2_response
-    status_code    <- tryCatch(resp_status(resp), error = function(e) NA_integer_)
-    # Convert headers to a plain list to ensure structural consistency for rbind
-    response_headers <- tryCatch(as.list(resp_headers(resp)), error = function(e) list())
-    content_type   <- tryCatch(resp_content_type(resp), error = function(e) NA_character_)
-    content_length <- tryCatch(as.integer(resp_header(resp, "content-length")), error = function(e) NA_integer_)
-    server         <- tryCatch(as.character(resp_header(resp, "server")), error = function(e) NA_character_)
-    server_date    <- tryCatch(httr::parse_http_date(resp_header(resp, "date")), error = function(e) as.POSIXct(NA))
+    
+    # Use the sanitizer for every value extracted from the response object
+    status_code    <- .sanitize_log_value(tryCatch(resp_status(resp), error = function(e) NULL), NA_integer_)
+    response_headers <- tryCatch(as.list(resp_headers(resp)), error = function(e) list(error = e$message))
+    content_type   <- .sanitize_log_value(tryCatch(resp_content_type(resp), error = function(e) NULL), NA_character_)
+    content_length <- .sanitize_log_value(tryCatch(as.integer(resp_header(resp, "content-length")), error = function(e) NULL), NA_integer_)
+    server         <- .sanitize_log_value(tryCatch(as.character(resp_header(resp, "server")), error = function(e) NULL), NA_character_)
+    server_date    <- .sanitize_log_value(tryCatch(httr::parse_http_date(resp_header(resp, "date")), error = function(e) NULL), as.POSIXct(NA))
     
     if (!is.null(resp$times) && is.numeric(resp$times)) {
-      dns_time     <- resp$times[["namelookup"]] %||% NA_real_
-      connect_time <- resp$times[["connect"]] %||% NA_real_
-      total_time   <- resp$times[["total"]] %||% NA_real_
+      dns_time     <- .sanitize_log_value(resp$times[["namelookup"]], NA_real_)
+      connect_time <- .sanitize_log_value(resp$times[["connect"]], NA_real_)
+      total_time   <- .sanitize_log_value(resp$times[["total"]], NA_real_)
     }
   }
   
@@ -273,3 +281,4 @@ func_10_append_parse_error <- function(processed_dt, html_content, chunk_name = 
   
   invisible(TRUE)
 }
+

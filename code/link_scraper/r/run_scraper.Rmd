@@ -37,7 +37,6 @@ get_module_paths <- function() {
 # --- 2. LOAD ALL MODULES ---
 
 message("Loading all required modules...")
-# Load modules in order of dependency. 08 is the new core state manager.
 source("01_init.R")
 source("02_chunk_manager.R")
 source("03_identity_manager.R")
@@ -79,12 +78,12 @@ overview_before_chunk_run <- func_11_generate_progress_report()
 # Protocoll used VPN
 func_03_initialzie_vpn_connnection()
 
-domains= "fr.de"
+excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
 
 # Build Chunk
 current_chunk <- func_02_build_chunk(
-  domains = domains,
-  absolute_links = 500
+  exclude_domains = excluded_domains, 
+  absolute_links = 100
 )
 
 chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately

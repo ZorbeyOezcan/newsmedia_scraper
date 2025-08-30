@@ -44,122 +44,106 @@ func_07_analyze_response <- function(response_result, chunk_name = current_chunk
   # Initialize a variable to hold the final result of this function
   final_analysis_result <- list()
   
-  # Check if request was successful at network level
+  # --- STEP 1: Determine the final status of the request FIRST ---
+  
   if (!response_result$success || is.null(httr2_response)) {
-    # Case 1: Network error or timeout
-    response_analysis <- "network_error"
-    
-    # Log the failed response
-    func_10_log_response(
-      response_result = response_result,
-      chunk_name = chunk_name,
-      response_analysis = response_analysis
-    )
-    
-    # Add the failed request to the retry queue
-    func_10_append_retry(
-      retry_reason = response_analysis,
-      request_info = request_info,
-      chunk_name = chunk_name
-    )
-    
-    # Prepare the final result object for this function
+    # Case 1: Network error or timeout. This is a final decision.
     final_analysis_result <- list(
       success = FALSE,
       action = "retry",
-      response_analysis = response_analysis,
+      response_analysis = "network_error",
       message = "Network error occurred"
     )
     
-    # Update the domain state tracker with the analysis result
-    func_08_update_domain_state(request_info$domain, final_analysis_result)
-    
-    return(final_analysis_result)
-  }
-  
-  # If we have a response, get the HTTP status code
-  status_code <- tryCatch({
-    resp_status(httr2_response)
-  }, error = function(e) {
-    NA_integer_
-  })
-  
-  # Analyze based on status code
-  response_analysis <- if (is.na(status_code)) {
-    "invalid_response"
-  } else if (status_code == 200) {
-    "valid"
   } else {
-    "non_200"
-  }
-  
-  # Log the response with the initial analysis
-  func_10_log_response(
-    response_result = response_result,
-    chunk_name = chunk_name,
-    response_analysis = response_analysis
-  )
-  
-  # Handle based on the response analysis
-  if (response_analysis == "valid") {
-    # Case 2: Valid 200 OK response, forward to parser
-    parse_result <- func_06_parse_html(
-      response_result = response_result,
-      chunk_name      = chunk_name
-    )
+    # Case 2: We have a response from the server.
+    status_code <- tryCatch(resp_status(httr2_response), error = function(e) NA_integer_)
     
-    # The parser itself can detect issues like bot pages, which are retryable.
-    # We check the parser's output to make a final decision.
-    if (isTRUE(parse_result$success)) {
-      final_analysis_result <- list(
-        success = TRUE,
-        action = "parse",
-        response_analysis = response_analysis,
-        parse_result = parse_result,
-        message = "Response successfully analyzed and parsed."
-      )
-    } else if (parse_result$reason == "bot_detected") {
-      # If the parser found a bot page, we override the action to "retry".
+    if (is.na(status_code)) {
+      # The response object is invalid.
       final_analysis_result <- list(
         success = FALSE,
         action = "retry",
-        response_analysis = "bot_detected", # More specific reason
-        parse_result = parse_result,
-        message = "Parser detected a bot page."
+        response_analysis = "invalid_response",
+        message = "Could not read status code from response."
       )
+      
+    } else if (status_code == 200) {
+      # Case 2a: Status is 200 OK. Now we must parse it to get the TRUE final status.
+      parse_result <- func_06_parse_html(
+        response_result = response_result,
+        chunk_name      = chunk_name
+      )
+      
+      if (isTRUE(parse_result$success)) {
+        # The parser succeeded. This is a genuine success.
+        final_analysis_result <- list(
+          success = TRUE,
+          action = "parse",
+          response_analysis = "valid",
+          parse_result = parse_result,
+          message = "Response successfully analyzed and parsed."
+        )
+      } else if (parse_result$reason == "bot_detected") {
+        # The parser found a bot page. The final status is "bot_detected".
+        final_analysis_result <- list(
+          success = FALSE,
+          action = "retry",
+          response_analysis = "bot_detected",
+          parse_result = parse_result,
+          message = "Parser detected a bot page."
+        )
+      } else {
+        # Any other parser failure.
+        final_analysis_result <- list(
+          success = FALSE,
+          action = "parse", # It was attempted, but failed.
+          response_analysis = parse_result$reason %||% "parsing_failed", # Use specific reason from parser
+          parse_result = parse_result,
+          message = "Response analyzed, but parsing failed."
+        )
+      }
+      
     } else {
-      # For other parsing failures, the action remains "parse" but success is FALSE.
+      # Case 2b: Status is not 200 (e.g., 403, 404, 500). This is a retryable error.
       final_analysis_result <- list(
         success = FALSE,
-        action = "parse", # It was attempted, but failed. Not a network retry.
-        response_analysis = response_analysis,
-        parse_result = parse_result,
-        message = "Response analyzed, but parsing failed."
+        action = "retry",
+        response_analysis = paste0("http_error_", status_code), # More specific reason
+        status_code = status_code,
+        message = sprintf("Received non-200 status code: %d", status_code)
       )
     }
-    
-  } else {
-    # Case 3: Non-200 or invalid response, add to retry queue
+  }
+  
+  # --- STEP 2: Log and store based on the FINAL decision ---
+  
+  # Log every response with its final, accurate analysis result.
+  func_10_log_response(
+    response_result = response_result,
+    chunk_name = chunk_name,
+    response_analysis = final_analysis_result$response_analysis
+  )
+  
+  # If the final action is 'retry', add it to the retry queue.
+  if (final_analysis_result$action == "retry") {
     func_10_append_retry(
-      retry_reason = response_analysis,
+      retry_reason = final_analysis_result$response_analysis,
       request_info = request_info,
       chunk_name = chunk_name
     )
-    
-    # Prepare the final result object
-    final_analysis_result <- list(
-      success = FALSE,
-      action = "retry",
-      response_analysis = response_analysis,
-      status_code = status_code,
-      message = sprintf("Response analysis: %s (Status: %s)",
-                        response_analysis,
-                        ifelse(is.na(status_code), "NA", as.character(status_code)))
-    )
   }
   
-  # Update the domain state tracker with the final analysis result before returning
+  # --- STEP 3: Update domain state and return ---
+  
+  # Update the domain state tracker with the final, consolidated result.
   func_08_update_domain_state(request_info$domain, final_analysis_result)
   
   return(final_analysis_result)
 }
+
+# Helper operator for safe NULL fallbacks
+`%||%` <- function(a, b) {
+  if (is.null(a)) b else a
+}
+
