@@ -1,0 +1,92 @@
+domain,excluded_manually_because,links_in_input,no_links_found
+dnn.de,is_dynamic,0,FALSE
+express.de,is_dynamic,0,FALSE
+focus.de,is_dynamic,0,FALSE
+haz.de,is_dynamic,0,FALSE
+ksta.de,is_dynamic,0,FALSE
+lvz.de,is_dynamic,0,FALSE
+maz-online.de,is_dynamic,0,FALSE
+ostsee-zeitung.de,is_dynamic,0,FALSE
+rbb24.de,is_dynamic,0,FALSE
+rnd.de,is_dynamic,0,FALSE
+ruhrnachrichten.de,is_dynamic,0,FALSE
+saechsische.de,is_dynamic,0,FALSE
+deutschlandfunk.de,is_tv_or_radio,0,FALSE
+deutschlandfunkkultur.de,is_tv_or_radio,0,FALSE
+kabeleins.de,is_tv_or_radio,0,FALSE
+prosieben.de,is_tv_or_radio,0,FALSE
+vox.de,is_tv_or_radio,0,FALSE
+finanzen.net,no_sitemap_found,0,FALSE
+news-und-nachrichten.de,no_sitemap_found,0,FALSE
+stern.de,no_sitemap_found,0,FALSE
+sueddeutsche.de,no_sitemap_found,0,FALSE
+t-online.de,no_sitemap_found,0,FALSE
+tagesschau.de,no_sitemap_found,0,FALSE
+wdr.de,no_sitemap_found,0,FALSE
+zdf.de,no_sitemap_found,0,FALSE
+presseportal.de,not excluded,37553,FALSE
+welt.de,not excluded,22987,FALSE
+augsburger-allgemeine.de,not excluded,20625,FALSE
+zeit.de,not excluded,19787,FALSE
+schwaebische.de,not excluded,18115,FALSE
+rp-online.de,not excluded,16013,FALSE
+ndr.de,not excluded,13564,FALSE
+volksstimme.de,not excluded,13162,FALSE
+tagesspiegel.de,not excluded,13085,FALSE
+rollingstone.de,not excluded,11541,FALSE
+nordkurier.de,not excluded,11459,FALSE
+n-tv.de,not excluded,11091,FALSE
+badische-zeitung.de,not excluded,10205,FALSE
+bild.de,not excluded,9700,FALSE
+freiepresse.de,not excluded,9520,FALSE
+swp.de,not excluded,8752,FALSE
+tag24.de,not excluded,8265,FALSE
+news.de,not excluded,7533,FALSE
+shz.de,not excluded,7128,FALSE
+t3n.de,not excluded,7075,FALSE
+fr.de,not excluded,6874,FALSE
+faz.net,not excluded,5810,FALSE
+noz.de,not excluded,5789,FALSE
+spiegel.de,not excluded,5603,FALSE
+heise.de,not excluded,4894,FALSE
+derwesten.de,not excluded,4831,FALSE
+bnn.de,not excluded,4244,FALSE
+fnp.de,not excluded,4149,FALSE
+berliner-zeitung.de,not excluded,4119,FALSE
+rtl.de,not excluded,4018,FALSE
+mopo.de,not excluded,3681,FALSE
+epochtimes.de,not excluded,2693,FALSE
+taz.de,not excluded,2538,FALSE
+wz.de,not excluded,2517,FALSE
+swr.de,not excluded,2489,FALSE
+newsflash24.de,not excluded,2415,FALSE
+berliner-kurier.de,not excluded,2334,FALSE
+kreiszeitung.de,not excluded,2331,FALSE
+businessinsider.de,not excluded,1942,FALSE
+wa.de,not excluded,1600,FALSE
+wiwo.de,not excluded,1511,FALSE
+ruhr24.de,not excluded,1507,FALSE
+karlsruhe-insider.de,not excluded,1026,FALSE
+manager-magazin.de,not excluded,863,FALSE
+abendzeitung-muenchen.de,not excluded,777,FALSE
+echo24.de,not excluded,449,FALSE
+heidelberg24.de,not excluded,327,FALSE
+watson.de,not excluded,306,FALSE
+frankenpost.de,not excluded,69,FALSE
+swr3.de,not excluded,63,FALSE
+stuttgarter-zeitung.de,not excluded,1,FALSE
+3sat.de,not excluded,0,TRUE
+abendblatt.de,not excluded,0,TRUE
+br.de,not excluded,0,TRUE
+hna.de,not excluded,0,TRUE
+infranken.de,not excluded,0,TRUE
+jungefreiheit.de,not excluded,0,TRUE
+mdr.de,not excluded,0,TRUE
+merkur.de,not excluded,0,TRUE
+morgenpost.de,not excluded,0,TRUE
+nw.de,not excluded,0,TRUE
+suedkurier.de,not excluded,0,TRUE
+swrfernsehen.de,not excluded,0,TRUE
+thueringer-allgemeine.de,not excluded,0,TRUE
+tz.de,not excluded,0,TRUE
+waz.de,not excluded,0,TRUE

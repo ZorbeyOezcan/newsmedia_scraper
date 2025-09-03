@@ -11,7 +11,6 @@ get_module_paths <- function() {
     parsing_config = file.path(base_path, "data", "config", "06_parsing_config"),
     state          = file.path(base_path, "data", "state"),
     logs           = file.path(base_path, "data", "logs"),
-    chunk_logs     = file.path(base_path, "data", "logs",  "chunk_logs"),
     chunk_outputs  = file.path(base_path, "data", "output", "chunk_outputs"),
     chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs"),
     parse_error    = file.path(base_path, "data", "input", "parse_error")

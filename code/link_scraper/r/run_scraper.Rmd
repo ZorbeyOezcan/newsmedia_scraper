@@ -24,7 +24,6 @@ get_module_paths <- function() {
     parsing_config = file.path(base_path, "data", "config", "06_parsing_config"),
     state          = file.path(base_path, "data", "state"),
     logs           = file.path(base_path, "data", "logs"),
-    chunk_logs     = file.path(base_path, "data", "logs",  "chunk_logs"),
     chunk_outputs  = file.path(base_path, "data", "output", "chunk_outputs"),
     chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs"),
     parse_error    = file.path(base_path, "data", "input", "parse_error")
@@ -58,12 +57,16 @@ message("All modules loaded successfully.")
 
 # Level 1: Conservative (3 errors -> rotate, 3 kills -> block)
 # Level 2: Cautious (5 errors -> rotate, 5 kills -> block)
-# Level 3: Default (10 errors -> rotate, 5 kills -> block)
-  # "3" = list(error_limit = 10, kill_limit = 10),
-  # "4" = list(error_limit = 20, kill_limit = 15),
-# Level 4: Aggressive (20 errors -> rotate, 5 kills -> block)
+# Level 3: Default (10 errors -> rotate, 10 kills -> block)
+# Level 4: Aggressive (20 errors -> rotate, 15 kills -> block)
 # Level 5: Very Aggressive - Never Block (30 errors -> rotate, never block domain)
 aggressiveness_level <- 5
+
+# --- Optional Sleep Timer ---
+# Set to NULL to disable.
+# Set to a single number for a fixed delay in seconds (e.g., 0.5).
+# Set to a vector of two numbers for a random delay within that range (e.g., c(0.2, 3)).
+sleep_timer <- NULL # Example: random sleep between 0.5 and 2.5 seconds
 
 # Show overview
 overview_before_chunk_run <- func_11_generate_progress_report()
@@ -80,10 +83,26 @@ func_03_initialzie_vpn_connnection()
 
 excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
 
+# domains_to_process <- c(
+# "augsburger-allgemeine.de",
+# "welt.de",
+# "noz.de",
+# "wa.de",
+# "schwaebische.de",
+# "berliner-kurier.de",
+# "n-tv.de",
+# "newsflash24.de",
+# "kreiszeitung.de",
+# "ruhr24.de",
+# "echo24.de",
+# "volksstimme.de"
+# )
+
 # Build Chunk
 current_chunk <- func_02_build_chunk(
+  # domains = domains_to_process, 
   exclude_domains = excluded_domains, 
-  absolute_links = 100
+  absolute_links = 50000
 )
 
 chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately
@@ -148,6 +167,18 @@ if (total_links > 0) {
         message(paste(rep("=", 70), collapse = ""))
         break
     }
+    
+    # --- Optional Sleep Timer ---
+    if (!is.null(sleep_timer)) {
+      if (length(sleep_timer) == 1 && is.numeric(sleep_timer)) {
+        # Fixed sleep
+        Sys.sleep(sleep_timer)
+      } else if (length(sleep_timer) == 2 && is.numeric(sleep_timer)) {
+        # Random sleep in range
+        sleep_duration <- runif(1, min = sleep_timer[1], max = sleep_timer[2])
+        Sys.sleep(sleep_duration)
+      }
+    }
 
     # --- CHECKPOINT-LOGIC ---
     if (i %% 1000 == 0 && i < total_links) {
@@ -196,9 +227,14 @@ overview <- func_09_generate_overview_report(plot_summary = TRUE)
 # show chunk success
 func_11_compare_chunk_runs(overview_before_chunk_run, overview_after_chunk_run, chunk_dt)
 
+# Show HTTP response summary for the completed chunk
+func_11_summarize_http_responses(current_chunk)
+
 # Show final report
 print(overview)
 
 message("\nRun finished successfully!")
 
 ```
+
+

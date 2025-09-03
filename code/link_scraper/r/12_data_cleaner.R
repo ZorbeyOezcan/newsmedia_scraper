@@ -214,10 +214,20 @@ paths <- get_module_paths()
 # Add any full URL here to remove it from all datasets.
 excluded_links <- c(
   "https://www.augsburger-allgemeine.de/sport/fc-augsburg/fc-augsburg-unter-thorup-jubilaeum-und-chance-auf-ungeschlagene-serie-gegen-gladbach-106034005", 
-  
+  "https://www.badische-zeitung.de/insolvenz-bei-biopulver-und-monte-ziego",
+  "https://www.badische-zeitung.de/kuriose-museen",
+  "https://www.badische-zeitung.de/mondaene-museen",
+  "https://www.badische-zeitung.de/leserfotos-x7x",
+  "https://www.badische-zeitung.de/loipen-x1x",
+  "https://www.badische-zeitung.de/kutschfahrten-x1x",
+  "https://www.badische-zeitung.de/lokale-mit-sonnenterrasse",
+  "https://www.badische-zeitung.de/valentinstag-x5x",
+    
   "https://www.berliner-kurier.de/",
   "https://www.berliner-kurier.de/topics", 
   "https://www.berliner-kurier.de/kuendigung.297245",
+  
+  "https://bnn.de/format/scheitern",
   
   "http://www.br.de/franken/inhalt/nachrichten/index.html",
   "http://www.br.de/radio/bayern2/sendungen/weltempfaenger/index.html",
@@ -253,7 +263,9 @@ excluded_links <- c(
   "https://www.noz.de/sport/ergebnisse-tabellen/fussball/kreisliga-os",
   "https://www.noz.de/sport/fussball/champions-league",
   "https://www.noz.de/sport/vfl-osnabrueck/spielplan",
-  "https://www.noz.de/sport/vfl-osnabrueck/tabelle"
+  "https://www.noz.de/sport/vfl-osnabrueck/tabelle",
+  
+  "https://www.rollingstone.de/locations.kml"
 )
 
 

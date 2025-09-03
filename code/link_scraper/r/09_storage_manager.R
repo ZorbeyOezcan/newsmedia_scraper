@@ -37,7 +37,6 @@ func_09_init_data_structures <- function(chunk_name) {
   paths        <- get_module_paths()
   
   # Ensure folders exist
-  dir.create(paths$chunk_logs,    showWarnings = FALSE, recursive = TRUE)
   dir.create(paths$chunk_outputs, showWarnings = FALSE, recursive = TRUE)
   dir.create(paths$chunk_inputs,  showWarnings = FALSE, recursive = TRUE)
   
@@ -46,7 +45,7 @@ func_09_init_data_structures <- function(chunk_name) {
     id               = integer(),
     domain           = character(),
     url              = character(),
-    timestamp_scraped= as.POSIXct(character()),
+    timestamp_scraped = as.POSIXct(character()),
     date_time        = as.POSIXct(character()),
     author           = character(),
     headline         = character(),

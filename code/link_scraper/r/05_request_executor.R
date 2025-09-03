@@ -30,13 +30,11 @@ library(lubridate)
 func_05_execute_request <- function(request_package, chunk_name = "chunk_01", worker_id = 1) {
   # Validate input request package
   if (!is.list(request_package) || !request_package$success) {
-    # Even in this initial validation failure, we return the standardized list.
-    # We construct a minimal request_info for logging purposes.
     return(list(
       success = FALSE,
       error_message = "Invalid or failed request package provided",
       httr2_response = NULL,
-      session_updated = request_package$request_params$session %||% list(), # Safely get session
+      session_updated = request_package$request_params$session %||% list(),
       request_info = list(
         request_id = NA_integer_,
         id = request_package$request_params$id %||% NA_integer_,
@@ -57,7 +55,6 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
   aggressiveness <- request_package$request_params$aggressiveness
   request_timestamp <- request_package$request_params$timestamp
   
-  # Validate essential parameters
   if (is.null(url) || is.null(session) || is.null(session$headers)) {
     return(list(
       success = FALSE,
@@ -77,8 +74,16 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
     ))
   }
   
-  # Log request initiation
   message(sprintf("Executing request: %s", url))
+  
+  # Log the request BEFORE the attempt. The result of this is the definitive request_id.
+  request_id <- func_10_log_request(
+    request_package = request_package,
+    session = session,
+    httr2_request = NULL, # We don't have the full httr2_request object here yet, pass NULL
+    chunk_name = chunk_name,
+    worker_id = worker_id
+  )
   
   tryCatch({
     # Create httr2 request object
@@ -87,82 +92,29 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
     # Add user agent header
     req <- req_user_agent(req, session$headers$user_agent)
     
-    # Add custom headers from session
+    # ... (header assembly code remains the same) ...
     custom_headers <- list()
-    
-    # Add Accept header
-    if (!is.null(session$headers$accept)) {
-      custom_headers[["Accept"]] <- session$headers$accept
-    }
-    
-    # Add Accept-Language header
-    if (!is.null(session$headers$accept_language)) {
-      custom_headers[["Accept-Language"]] <- session$headers$accept_language
-    }
-    
-    # Add Accept-Encoding header
-    if (!is.null(session$headers$accept_encoding)) {
-      custom_headers[["Accept-Encoding"]] <- session$headers$accept_encoding
-    }
-    
-    # Add Connection header
-    if (!is.null(session$headers$connection)) {
-      custom_headers[["Connection"]] <- session$headers$connection
-    }
-    
-    # Add Referer header
-    if (!is.null(session$headers$referer)) {
-      custom_headers[["Referer"]] <- session$headers$referer
-    }
-    
-    # Add Host header
-    if (!is.null(session$headers$host)) {
-      custom_headers[["Host"]] <- session$headers$host
-    }
-    
-    # Add Upgrade-Insecure-Requests header (if present)
-    if (!is.null(session$headers$upgrade_insecure_requests)) {
-      custom_headers[["Upgrade-Insecure-Requests"]] <- session$headers$upgrade_insecure_requests
-    }
-    
-    # Add Sec-Fetch headers
-    if (!is.null(session$headers$sec_fetch_dest)) {
-      custom_headers[["Sec-Fetch-Dest"]] <- session$headers$sec_fetch_dest
-    }
-    
-    if (!is.null(session$headers$sec_fetch_mode)) {
-      custom_headers[["Sec-Fetch-Mode"]] <- session$headers$sec_fetch_mode
-    }
-    
-    if (!is.null(session$headers$sec_fetch_site)) {
-      custom_headers[["Sec-Fetch-Site"]] <- session$headers$sec_fetch_site
-    }
-    
-    # Apply all custom headers
+    if (!is.null(session$headers$accept)) custom_headers[["Accept"]] <- session$headers$accept
+    if (!is.null(session$headers$accept_language)) custom_headers[["Accept-Language"]] <- session$headers$accept_language
+    if (!is.null(session$headers$accept_encoding)) custom_headers[["Accept-Encoding"]] <- session$headers$accept_encoding
+    if (!is.null(session$headers$connection)) custom_headers[["Connection"]] <- session$headers$connection
+    if (!is.null(session$headers$referer)) custom_headers[["Referer"]] <- session$headers$referer
+    if (!is.null(session$headers$host)) custom_headers[["Host"]] <- session$headers$host
+    if (!is.null(session$headers$upgrade_insecure_requests)) custom_headers[["Upgrade-Insecure-Requests"]] <- session$headers$upgrade_insecure_requests
+    if (!is.null(session$headers$sec_fetch_dest)) custom_headers[["Sec-Fetch-Dest"]] <- session$headers$sec_fetch_dest
+    if (!is.null(session$headers$sec_fetch_mode)) custom_headers[["Sec-Fetch-Mode"]] <- session$headers$sec_fetch_mode
+    if (!is.null(session$headers$sec_fetch_site)) custom_headers[["Sec-Fetch-Site"]] <- session$headers$sec_fetch_site
     req <- req_headers(req, !!!custom_headers)
     
-    # Configure cookie handling if cookie jar exists
     if (!is.null(session$cookie_jar)) {
       req <- req_cookie_preserve(req, session$cookie_jar)
     }
     
-    # Disable automatic error handling for 4xx/5xx status codes
-    # We want to handle all responses manually in module 07
     req <- req_error(req, is_error = ~ FALSE)
-    
-    # Log the request before execution
-    request_id <- func_10_log_request(
-      request_package = request_package,
-      session = session,
-      httr2_request = req,
-      chunk_name = chunk_name,
-      worker_id = worker_id
-    )
     
     # Perform the actual HTTP request
     httr2_response <- req_perform(req)
     
-    # Log successful execution
     message(sprintf("Request executed: %s (Status: %d)", 
                     url, resp_status(httr2_response)))
     
@@ -171,7 +123,7 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
       httr2_response = httr2_response,
       session_updated = session,
       request_info = list(
-        request_id = request_id,
+        request_id = request_id, # Use the request_id generated before the tryCatch
         id = request_package$request_params$id,
         url = url,
         domain = domain,
@@ -180,34 +132,22 @@ func_05_execute_request <- function(request_package, chunk_name = "chunk_01", wo
         aggressiveness_level = aggressiveness,
         request_timestamp = request_timestamp
       ),
-      error_message = NA_character_ # Add NA error message on success
+      error_message = NA_character_
     ))
     
   }, error = function(e) {
     # Handle request errors (network failures, timeouts, etc.)
     message(sprintf("Request failed: %s (Error: %s)", url, e$message))
     
-    # Log the failed request attempt
-    request_id <- tryCatch({
-      func_10_log_request(
-        request_package = request_package,
-        session = session,
-        httr2_request = NULL,
-        chunk_name = chunk_name,
-        worker_id = worker_id
-      )
-    }, error = function(log_error) {
-      warning(sprintf("Failed to log request: %s", log_error$message))
-      NA_integer_
-    })
-    
+    # FIX: The request has already been logged. We just need to return the failure package.
+    # The request_id from the parent environment is automatically available here.
     return(list(
       success = FALSE,
-      error_message = as.character(e$message), # Rename 'error' to 'error_message'
+      error_message = as.character(e$message),
       httr2_response = NULL,
       session_updated = session,
       request_info = list(
-        request_id = request_id,
+        request_id = request_id, # Use the request_id generated before the tryCatch
         id = request_package$request_params$id,
         url = url,
         domain = domain,

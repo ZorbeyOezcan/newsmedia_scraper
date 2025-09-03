@@ -121,7 +121,7 @@ func_11_generate_progress_report <- function() {
 }
 
 # Example of how to call the function:
-# overview <- func_11_generate_progress_report()
+overview <- func_11_generate_progress_report()
 
 
 # --- Function to Compare Chunk Run Performance ---
@@ -177,4 +177,64 @@ func_11_compare_chunk_runs <- function(overview_before, overview_after, chunk_dt
     new_parse_errors = new_parse_errors,
     success_rate = success_rate
   ))
+}
+
+
+# --- Function to Summarize HTTP Responses for a Chunk ---
+func_11_summarize_http_responses <- function(chunk_name) {
+  
+  # Construct the name of the response log object
+  log_object_name <- paste0(chunk_name, "_response_log")
+  
+  # Check if the log object exists in the global environment
+  if (!exists(log_object_name, envir = .GlobalEnv)) {
+    message(sprintf("\nResponse log '%s' not found. Cannot generate summary.", log_object_name))
+    return(invisible())
+  }
+  
+  # Retrieve the log data.table
+  response_log <- get(log_object_name, envir = .GlobalEnv)
+  
+  # Check if the log is empty
+  if (nrow(response_log) == 0) {
+    message("\nResponse log is empty. No HTTP responses to summarize.")
+    return(invisible())
+  }
+  
+  total_responses <- nrow(response_log)
+  
+  # Group by the 'response_analysis' column, which is more descriptive
+  summary_dt <- response_log[, .(
+    count = .N
+  ), by = .(response_type = ifelse(is.na(response_analysis), "NA_in_analysis", response_analysis))]
+  
+  # Calculate percentage
+  summary_dt[, percentage := (count / total_responses) * 100]
+  
+  # Order by count descending
+  setorder(summary_dt, -count)
+  
+  # --- Print the formatted summary ---
+  message(paste(rep("=", 60), collapse = ""))
+  message("--- HTTP Response Summary ---")
+  message(paste(rep("-", 60), collapse = ""))
+  message(sprintf("%-30s %-10s %s", "Response Type", "Count", "Percentage"))
+  message(paste(rep("-", 60), collapse = ""))
+  
+  # Iterate and print each row
+  for (i in 1:nrow(summary_dt)) {
+    row <- summary_dt[i]
+    # Format the line for printing
+    line <- sprintf("%-30s %-10d %.2f%%",
+                    row$response_type,
+                    row$count,
+                    row$percentage)
+    message(line)
+  }
+  
+  message(paste(rep("-", 60), collapse = ""))
+  message(sprintf("%-30s %-10d 100.00%%", "Total", total_responses))
+  message(paste(rep("=", 60), collapse = ""))
+  
+  invisible(summary_dt)
 }

@@ -248,7 +248,7 @@ init_input_dataset <- function(paths) {
     processed = FALSE,             # initialize as FALSE
     total_requests = 0L,           # initialize as 0
     retry = FALSE,                 # initialize as FALSE
-    parse_error = FALSE,          # initialize as FALSE
+    parse_error = FALSE,           # initialize as FALSE
     error = FALSE                  # initialize as FALSE
     
   )]
