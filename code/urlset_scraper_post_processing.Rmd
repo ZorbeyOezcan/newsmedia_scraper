@@ -5,22 +5,6 @@ date: "2025-05-26"
 output: html_document
 ---
 
-# Overview: Post-Processing and Retry Framework for Sitemap URLSet Extraction
-
-This document presents a comprehensive post-processing pipeline designed to enhance the completeness and reliability of news article URL extraction from sitemap data. Building upon the primary urlset_scraper framework, this system implements a systematic retry mechanism, result consolidation, and analytical reporting suite to maximize data coverage and ensure methodological transparency.
-
-The pipeline operates on the serialized outputs of the initial scraping process, reconstructing the processing environment and applying targeted retry logic to previously failed requests. Through VPN rotation and user-agent diversification, the system attempts to overcome temporary network barriers, rate limiting, and access restrictions that may have affected the initial extraction phase. The framework distinguishes between persistent technical failures and transient connectivity issues, providing granular classification of error types and resolution outcomes.
-
-Core functionalities include the reconstruction of global processing state from archived data tables, implementation of retry-specific progression tracking, execution of the master processing loop on failed entries, comparative analysis of pre- and post-retry error patterns, and generation of comprehensive summary statistics and visualizations. The system maintains full methodological traceability through detailed logging and produces both domain-level and sitemap-level analytical reports suitable for academic replication and validation.
-Inputs include serialized progression tables, output data, error logs, and master tracking structures from the initial scraping phase, along with VPN configuration and user-agent rotation parameters. Outputs comprise enhanced URLSet collections with increased coverage, comparative error analysis, temporal trend visualizations, and structured summary tables documenting the effectiveness of the retry methodology across different news domains and temporal periods.
-
-
-## Code Chunk 1: Initial Setup and Library Loading
-
-This code chunk initializes the R Markdown environment for the post-processing pipeline by configuring knitting options and loading all required analytical libraries. It sets global options to suppress messages and warnings during knitting, ensuring cleaner output for academic documentation. The chunk loads a comprehensive set of packages for data manipulation (tidyverse, data.table), HTTP requests (httr), XML parsing (xml2), logging (futile.logger), temporal analysis (lubridate), and advanced visualization (ggplot2, viridis, cowplot).
-
-Additionally, it defines three critical directory paths: the main output folder for final results, the working data folder containing intermediate processing outputs from the primary scraper, and the documentation folder for logs and analytical reports. These folder definitions establish the organizational structure for the entire post-processing workflow, ensuring consistent file management and facilitating reproducible research practices. The setup ensures that all subsequent chunks operate within a correctly initialized environment with access to necessary analytical tools and standardized file paths.
-
 ```{r Step 1: Setup and load required packages}
 # Set knitting options for clean output
 knitr::opts_chunk$set(
@@ -47,16 +31,10 @@ step_1_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/data"
 step_1_working_data_output_folder <- "/Users/zorbeyozcan/newsmedia_scraper/working_data/urlset_scraper_output"
 step_1_logging_folder <- "/Users/zorbeyozcan/newsmedia_scraper/documentation"
 
-
 cat("Step 1 completed: Packages loaded, outputfolder defined.\n")
 
 ```
 
-## Code Chunk 2: Loading Input Data and Importing Functions from Primary Scraper
-
-### Summary: 
-
-This code chunk performs dual initialization by loading serialized data outputs from the primary scraping process and importing all necessary functions and variables from the original urlset_scraper framework. The chunk ensures complete operational independence for the post-processing pipeline while maintaining full compatibility with the primary scraper's methodology and data structures.
 
 ```{r Step 2: Reading the input}
 # Define folder containing .rds files for retry processing
@@ -164,16 +142,11 @@ if (length(missing_objects) > 0) {
   cat("All essential functions and variables loaded successfully.\n")
 }
 
-
 cat("Step 2 completed: Inputs loaded and functions imported from part 1.\n")
 
 ```
 
-## VPN Configuration and User-Agent Rotation Setup for Retry Operations
 
-### Summary:
-
-This code chunk establishes a differentiated network configuration for retry operations by implementing VPN verification protocols and defining alternative user-agent strings to maximize the probability of successful request completion during the retry phase. The chunk ensures operational security and methodological rigor by preventing accidental execution under identical network conditions as the initial scraping session.
 
 ```{r Step 3: Set VPN and User Agents}
 # Retrieve the current external IP address for retry operations
@@ -209,15 +182,7 @@ cat("Step 3 completed: VPN set and compared, new user agents defined.\n")
 
 ```
 
-## Code Chunk 4: Creating Empty Retry Response Log Tables
 
-### Summary: 
-
-This code chunk initializes dedicated response logging infrastructure for the retry phase by creating empty retry-specific log tables that mirror the schema of original response logs while maintaining clear separation between initial and retry processing phases. The chunk ensures systematic tracking of retry attempt outcomes and enables comparative analysis of error patterns across processing phases.
-
-#### Retry Log Table Initialization:
-
-Iterates through each entry in the global_retry_master_dt table to identify sitemaps requiring retry processing. For each identified sitemap, constructs standardized naming conventions for both original and retry response log tables using the pattern sitemap_id_<layer_id>_response_log_dt and sitemap_id_<layer_id>_retry_response_log_dt respectively.
 
 ```{r Step 4: Creating empty retry response logs}
 
@@ -247,15 +212,7 @@ cat("Step 4 completed: Empty retry response log created.\n")
 
 ```
 
-## Code Chunk 5: Executing Master Loop on Retry Infrastructure with Environment Substitution
 
-### Summary: 
-
-This code chunk orchestrates the core retry processing by temporarily substituting the original processing environment with retry-specific configurations, executing the master loop on failed entries, and systematically restoring the original environment upon completion. The chunk implements a sophisticated environment management strategy that enables seamless reuse of the primary scraper's processing logic while maintaining clear separation between initial and retry operations.
-
-#### Master Loop Excecution: 
-
-Invokes the step_9_master_loop_func() function within the modified environment, enabling it to process retry entries using identical logic and error handling mechanisms as the original scraping phase. The loop applies the same recursive processing, status tracking, and error classification procedures to retry entries, but operates under different network conditions (VPN rotation) and user-agent profiles.
 
 ```{r Step 5: Calling the Master Loop on the retry master, results='hide', message=FALSE, warning=FALSE}
 
@@ -297,15 +254,7 @@ global_master_dt         <- step_5_master_backup
 global_user_agent_list   <- step_5_user_agents_backup
 
 ```
-## Code Chunk 6: Extracting Links from URLSet Output Tables and Applying Temporal Filtering
 
-### Summary: 
-
-This code chunk performs comprehensive URL extraction from all scraped URLSet XML content, implements sophisticated date parsing and prioritization logic, and applies temporal filtering to create clean datasets for downstream analysis. The chunk serves as the primary data consolidation phase, transforming raw XML sitemap content into structured tabular data suitable for sociotechnical analysis and visualization.
-
-#### Output: 
-
-The generated output "step_6_results_dt_filtered" is the data set that will be the basis of the link_scraper, containing all valid links to scrape. 
 
 ```{r Step 6: Extract all links from output tables and create filtered versions}
 # Initialize an empty table for all extracted links and dates
@@ -391,35 +340,7 @@ cat(sprintf("Links filtered out due to date: %d\n",
     nrow(step_6_results_dt_all_links) - nrow(step_6_results_dt_filtered)))
 
 ```
-## Code Chunk 7: Generating Comprehensive Result Overview Tables by Domain and Sitemap
 
-### Summary: 
-
-This code chunk constructs detailed analytical summary tables that aggregate processing outcomes across domain and individual sitemap levels, providing comprehensive metrics for evaluating scraping effectiveness, error patterns, and retry success rates. The chunk implements sophisticated error categorization and retry comparison logic to enable systematic assessment of the pipeline's performance and methodological robustness across different news sources and temporal periods.
-
-#### Domain-Level Aggregation Process:
-
-Creates a comprehensive domain overview table (step_7_result_overview_domain) that consolidates metrics across all sitemaps associated with each domain, including total link counts, valid link extraction rates, URLSet processing volumes, progression entry tracking, exclusion categorization, and error classification. This aggregation enables comparative analysis of scraping success across different news organizations and identification of domain-specific processing challenges.
-
-#### Sitemap-Level Detailed Analysis:
-
-Constructs granular sitemap-level summaries (step_7_result_overview_inputsitemap) that provide individual performance metrics for each input sitemap, enabling identification of specific problematic sitemaps and assessment of within-domain processing variability. This detailed tracking supports methodological transparency and facilitates targeted troubleshooting of persistent processing issues.
-
-#### Multi-Source Metrics Integration Function:
-
-Systematically queries multiple data sources for each sitemap including extracted link tables for content volume assessment, output tables for URLSet counting, progression tables for processing status evaluation, and error tables for exclusion and failure categorization. This integration provides comprehensive coverage of all processing outcomes and ensures no aspect of the pipeline's performance remains untracked.
-
-#### Retry Effectiveness Analysis Process:
-
-Implements sophisticated retry comparison logic that matches original and retry response logs by URL and error type to categorize retry outcomes into persistent errors (same error after retry), resolved errors (different error after retry), and completely resolved cases. This analysis enables quantitative assessment of retry mechanism effectiveness and identification of systematically problematic URLs or domains.
-
-#### Error Categorization and Classification:
-
-Distinguishes between multiple error types including string-based exclusions, date-based exclusions, XML parsing failures, HTTP response errors, and unsupported content types. Tracks both pre-retry and post-retry error counts to enable comprehensive evaluation of error resolution patterns and identification of persistent technical barriers.
-
-#### Outputs: 
-
-Domain-level summary table (step_7_result_overview_domain), sitemap-level detail table (step_7_result_overview_inputsitemap), serialized overview files for archival, and printed summary statistics for immediate assessment of processing outcomes across all domains and sitemaps.
 
 ```{r Step 7: Create result overview tables by domain and sitemap}
 # Initialize result overview table by domain
@@ -615,22 +536,14 @@ saveRDS(step_7_result_overview_domain,
 saveRDS(step_7_result_overview_inputsitemap, 
         file.path(step_1_logging_folder, "result_overview_inputsitemap.rds"))
 
+print(step_7_result_overview_domain)
+print(step_7_result_overview_inputsitemap)
+
+
 cat("Step 7 completed: Results summarized by domains and input sitemaps.\n")
 
 ```
-## Code Chunk 8: Generating Temporal Visualization Suite for Domain-Specific Link Extraction Patterns
 
-### Summary:
-
-This code chunk creates comprehensive temporal visualizations that reveal daily link extraction patterns across news domains during the specified analysis period. The visualization suite divides domains into two equal groups for display clarity and focuses exclusively on domains that successfully yielded link extractions, ensuring that analytical attention is directed toward productive data sources rather than failed processing attempts.
-
-#### Heatmap: 
-
-Generates dual-layer heatmap visualizations where each tile represents the daily link count for a specific domain-date combination. The visualization employs a logarithmic color scale using the Viridis color palette to accommodate the wide range of link volumes across domains, with colors ranging from dark (low counts) to bright yellow (high counts). Red tiles specifically highlight days within the 2025 analysis period where domains produced zero links, enabling immediate identification of potential data gaps or processing failures. The heatmap facilitates rapid visual assessment of temporal consistency and identifies domains with irregular publication patterns or systematic extraction issues.
-
-#### Faceted Time Series:
-
-Creates individual time series plots for each domain arranged in a grid layout, showing daily link counts as connected line plots with filled area charts underneath. Each domain receives its own subplot with independent y-axis scaling to accommodate varying publication volumes, enabling detailed examination of temporal trends within each news source. The faceted approach reveals domain-specific patterns such as weekend publication breaks, holiday periods, or systematic changes in content volume that might be obscured in aggregate visualizations.
 
 ```{r Step 8: Plotting results}
 # Prepare data for plotting
@@ -686,7 +599,7 @@ plot_heatmap <- function(domain_subset, filename) {
     theme_minimal(base_size = 10) +
     theme(
       axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
-      axis.text.y = element_text(size = 8, face = "bold"),  # Made domain labels larger and bold
+      axis.text.y = element_text(size = 5),
       plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
       panel.background = element_rect(fill = "white", color = NA),
       plot.background = element_rect(fill = "white", color = NA)
@@ -702,17 +615,13 @@ plot_heatmap <- function(domain_subset, filename) {
       date_labels = "%d.%m"
     )
 
-  # Save the plot
   ggsave(filename = file.path(step_1_logging_folder, filename),
          plot = p, width = 16, height = 10, dpi = 300)
-  
-  # Return the plot object for HTML display
-  return(p)
 }
 
-# Generate both heatmaps and display them
-heatmap_part1 <- plot_heatmap(domain_group1, "plot_step_8_heatmap_all_domains_part1.png")
-heatmap_part2 <- plot_heatmap(domain_group2, "plot_step_8_heatmap_all_domains_part2.png")
+# Generate both heatmaps
+plot_heatmap(domain_group1, "plot_step_8_heatmap_all_domains_part1.png")
+plot_heatmap(domain_group2, "plot_step_8_heatmap_all_domains_part2.png")
 
 # Helper function to create faceted plot
 plot_facet <- function(domain_subset, filename) {
@@ -724,9 +633,9 @@ plot_facet <- function(domain_subset, filename) {
     facet_wrap(~domain_clean, scales = "free_y", ncol = 7) +
     theme_minimal(base_size = 10) +
     theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 4),
-      axis.text.y = element_text(size = 4),
-      strip.text = element_text(size = 4),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+      axis.text.y = element_text(size = 5),
+      strip.text = element_text(size = 6),
       plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
       axis.title.x = element_blank(),
       axis.title.y = element_blank(),
@@ -744,35 +653,24 @@ plot_facet <- function(domain_subset, filename) {
   caption_text <- textGrob("X-axis: Date | Y-axis: Link Count", gp = gpar(fontsize = 10), hjust = 0.5)
   final_plot <- plot_grid(facet_plot, caption_text, ncol = 1, rel_heights = c(1, 0.04))
 
-  # Save the plot
   ggsave(filename = file.path(step_1_logging_folder, filename),
          plot = final_plot, width = 20, height = 12, dpi = 300)
-  
-  # Return the plot object for HTML display
-  return(final_plot)
 }
 
-# Generate both facet plots and display them
-facet_part1 <- plot_facet(domain_group1, "plot_step_8_facet_all_domains_part1.png")
-facet_part2 <- plot_facet(domain_group2, "plot_step_8_facet_all_domains_part2.png")
+# Generate both facet plots
+plot_facet(domain_group1, "plot_step_8_facet_all_domains_part1.png")
+plot_facet(domain_group2, "plot_step_8_facet_all_domains_part2.png")
 
-# Display heatmaps in HTML
-print(heatmap_part1)
-print(heatmap_part2)
+# Display summary tables in HTML output
+step_7_result_overview_domain
+step_7_result_overview_inputsitemap
 
-# Display facet plots in HTML
-print(facet_part1)
-print(facet_part2)
 
 cat("Step 8 completed: Heatmaps and Faceted Trends (2 parts each) plotted and saved.\n")
 
 ```
 
-## Saving the Results: 
 
-### Summary: 
-
-This chunks saves the cleaned data set and the data set containing all links into the output folder.
 
 ```{r Step 9: Saving results}
 # Save the cleaned results table
@@ -785,7 +683,6 @@ saveRDS(
   step_6_results_dt_all_links,
   file = file.path(step_1_output_folder, "all_links.rds")
 )
-
 
 cat("Step 9 completed: All data saved.\n")
 

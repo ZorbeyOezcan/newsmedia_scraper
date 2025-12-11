@@ -81,10 +81,11 @@ overview_before_chunk_run <- func_11_generate_progress_report()
 # Protocoll used VPN
 func_03_initialzie_vpn_connnection()
 
-excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
+# excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
 
-# domains_to_process <- c(
+domains_to_process <- c(
 # "augsburger-allgemeine.de",
+"tag24.de"
 # "welt.de",
 # "noz.de",
 # "wa.de",
@@ -95,14 +96,14 @@ excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
 # "kreiszeitung.de",
 # "ruhr24.de",
 # "echo24.de",
-# "volksstimme.de"
-# )
+# "volksstimme.de" 
+)
 
 # Build Chunk
 current_chunk <- func_02_build_chunk(
-  # domains = domains_to_process, 
-  exclude_domains = excluded_domains, 
-  absolute_links = 50000
+  domains = domains_to_process, 
+  # exclude_domains = excluded_domains
+  # absolute_links = 100
 )
 
 chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately

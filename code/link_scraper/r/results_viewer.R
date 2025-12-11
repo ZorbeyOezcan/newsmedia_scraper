@@ -7,6 +7,7 @@ response_log_test <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scr
 request_log_test <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/request_log.rds")
 vpn_log <- readRDS("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/03_vpn_log.rds")
 
+
 library(dplyr)
 
 # Zähle die Vorkommen jeder einzigartigen Domain
