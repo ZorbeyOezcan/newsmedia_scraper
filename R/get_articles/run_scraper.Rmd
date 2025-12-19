@@ -1,0 +1,243 @@
+---
+title: "Scraping Pipeline"
+author: "Zorbey Ozcan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true/
+    toc_float: true
+    theme: united
+---
+
+```{r setup, message=TRUE, warning=FALSE}
+# --- 1. SETUP & CONFIGURATION ---
+
+setwd("/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/r")
+
+# Helper function to define all necessary paths for the project
+get_module_paths <- function() {
+  base_path <- "/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper"
+  list(
+    input          = file.path(base_path, "data", "input"),
+    output         = file.path(base_path, "data", "output"),
+    config         = file.path(base_path, "data", "config"),
+    parsing_config = file.path(base_path, "data", "config", "06_parsing_config"),
+    state          = file.path(base_path, "data", "state"),
+    logs           = file.path(base_path, "data", "logs"),
+    chunk_outputs  = file.path(base_path, "data", "output", "chunk_outputs"),
+    chunk_inputs   = file.path(base_path, "data", "input",  "chunk_inputs"),
+    parse_error    = file.path(base_path, "data", "input", "parse_error")
+  )
+}
+
+```
+
+```{r}
+# --- 2. LOAD ALL MODULES ---
+
+message("Loading all required modules...")
+source("01_init.R")
+source("02_chunk_manager.R")
+source("03_identity_manager.R")
+source("08_domain_state_manager.R") 
+source("04_request_orchestrator.R") 
+source("05_request_executor.R")
+source("06_html_parser.R")
+source("07_response_analyzer.R")   
+source("09_storage_manager.R")
+source("10_log_manager.R")
+source("11_overview_manager.R")
+
+message("All modules loaded successfully.")
+
+```
+
+```{r, dev='png'}
+# --- 3. Prepare input data ---
+
+# Level 1: Conservative (3 errors -> rotate, 3 kills -> block)
+# Level 2: Cautious (5 errors -> rotate, 5 kills -> block)
+# Level 3: Default (10 errors -> rotate, 10 kills -> block)
+# Level 4: Aggressive (20 errors -> rotate, 15 kills -> block)
+# Level 5: Very Aggressive - Never Block (30 errors -> rotate, never block domain)
+aggressiveness_level <- 4
+
+# --- Optional Sleep Timer ---
+# Set to NULL to disable.
+# Set to a single number for a fixed delay in seconds (e.g., 0.5).
+# Set to a vector of two numbers for a random delay within that range (e.g., c(0.2, 3)).
+sleep_timer <- NULL # Example: random sleep between 0.5 and 2.5 seconds
+
+# Show overview
+overview_before_chunk_run <- func_11_generate_progress_report()
+
+```
+
+
+
+```{r}
+# --- 4. Prepare scraper infrastructure ---
+
+# Protocoll used VPN
+func_03_initialzie_vpn_connnection()
+
+# excluded_domains <- c("rollingstone.de", "epochtimes.de", "wiwo.de")
+
+domains_to_process <- c(
+# "augsburger-allgemeine.de",
+"wiwo.de",
+"faz.net",
+"epochtimes.de"
+# "welt.de",
+# "noz.de",
+# "wa.de",
+# "schwaebische.de",
+# "berliner-kurier.de",
+# "n-tv.de",
+# "newsflash24.de",
+# "kreiszeitung.de",
+# "ruhr24.de",
+# "echo24.de",
+# "volksstimme.de" 
+)
+
+# Build Chunk
+current_chunk <- func_02_build_chunk(
+  domains = domains_to_process, 
+  # exclude_domains = excluded_domains
+  absolute_links = 200
+)
+
+chunk_dt <- get(current_chunk, envir = .GlobalEnv) # Load chunk data immediately
+func_02_plot_chunk_overview(current_chunk)
+message(sprintf("Successfully created chunk: %s", current_chunk))
+
+
+# Initialize data tables for logging and output
+func_09_init_data_structures(current_chunk)
+
+# Build Sessionpool
+func_04_initialize_session_pool()
+
+# Initialize the domain state tracker for this chunk run
+func_08_initialize_tracker(unique(chunk_dt$domain))
+
+```
+
+```{r}
+# --- 5. Run Scraper ---
+total_links <- nrow(chunk_dt)
+
+message(sprintf("\nStarting to process %d links from chunk %s...", total_links, current_chunk))
+message(paste(rep("=", 70), collapse = ""))
+
+if (total_links > 0) {
+  for (i in 1:total_links) {
+    link_info <- chunk_dt[i]
+    
+    message(sprintf("\n[%d/%d] Processing: %s", i, total_links, link_info$url))
+    
+    # --- The new, streamlined pipeline ---
+    # MODIFIED: Pass the aggressiveness_level to the orchestrator.
+    request_package <- func_04_prepare_request(
+        id = link_info$id,
+        url = link_info$url,
+        domain = link_info$domain,
+        chunk_dt = chunk_dt,
+        aggressiveness_level = aggressiveness_level # Pass the configured level
+    )
+    
+    if (request_package$success) {
+      response_result <- func_05_execute_request(request_package = request_package, chunk_name = current_chunk, worker_id = 1)
+      analysis_result <- func_07_analyze_response(response_result = response_result, chunk_name = current_chunk)
+      
+      final_action <- analysis_result$action
+      message(sprintf("--> Status: %s (%s)", toupper(final_action), analysis_result$response_analysis))
+      
+    } else {
+      message(sprintf("--> Status: SKIPPED (%s)", request_package$message))
+    }
+    
+    # Check if all domains are exhausted to stop the chunk run early
+    all_domains_in_chunk <- unique(chunk_dt$domain)
+    current_states <- domain_tracker[domain %in% all_domains_in_chunk]
+    
+    # This logic now implicitly respects the kill_limit of the aggressiveness level
+    if (all(current_states$session_kill_count >= 5 & aggressiveness_level < 5) || 
+        (aggressiveness_level == 1 && all(current_states$session_kill_count >= 3))) {
+        message(paste(rep("=", 70), collapse = ""))
+        message("All domains in the chunk are blocked. Terminating chunk run early.")
+        message(paste(rep("=", 70), collapse = ""))
+        break
+    }
+    
+    # --- Optional Sleep Timer ---
+    if (!is.null(sleep_timer)) {
+      if (length(sleep_timer) == 1 && is.numeric(sleep_timer)) {
+        # Fixed sleep
+        Sys.sleep(sleep_timer)
+      } else if (length(sleep_timer) == 2 && is.numeric(sleep_timer)) {
+        # Random sleep in range
+        sleep_duration <- runif(1, min = sleep_timer[1], max = sleep_timer[2])
+        Sys.sleep(sleep_duration)
+      }
+    }
+
+    # --- CHECKPOINT-LOGIC ---
+    if (i %% 1000 == 0 && i < total_links) {
+        message(paste(rep("=", 70), collapse = ""))
+        message(sprintf("CHECKPOINT: Saving data after %d requests...", i))
+        func_09_fill_output(current_chunk)
+        message("CHECKPOINT: Emptying data structures.")
+        func_09_init_data_structures(current_chunk)
+        message("CHECKPOINT: Finished.")
+        message(paste(rep("=", 70), collapse = ""))
+    }
+  }
+}
+
+message(paste(rep("=", 70), collapse = ""))
+message("CHUNK PROCESSING COMPLETE.")
+
+```
+
+```{r}
+# --- 6. Save data ---
+
+# Clean dupes again
+func_09_clean_dupes()
+
+# Final Saving process
+func_09_fill_output(current_chunk)
+
+# split parse_error.rds
+func_09_process_parse_errors()
+
+# update input again
+func_09_update_input()
+
+# update overview again for comparison
+overview_after_chunk_run <- func_11_generate_progress_report()
+
+```
+
+```{r}
+# --- 7. Show results  ---
+
+# show chunk_overview
+overview <- func_09_generate_overview_report(plot_summary = TRUE)
+
+# show chunk success
+func_11_compare_chunk_runs(overview_before_chunk_run, overview_after_chunk_run, chunk_dt)
+
+# Show HTTP response summary for the completed chunk
+func_11_summarize_http_responses(current_chunk)
+
+# Show final report
+print(overview)
+
+message("\nRun finished successfully!")
+
+```
+
+

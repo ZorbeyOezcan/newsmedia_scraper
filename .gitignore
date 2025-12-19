@@ -49,16 +49,4 @@ po/*~
 rsconnect/
 
 ####
-
-# Working data (RDS Files in between steps)
-working_data/
-data/
-
-# data for link scraper: 
-/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data
-
-# Code book: 
-/Users/zorbeyozcan/newsmedia_scraper/code/link_scraper/data/logs/codebook.xlsx
-
-
-
+data/ 
